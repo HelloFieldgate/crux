@@ -17,6 +17,15 @@ If the `crux` MCP tool is not available in the current session, fall back to rea
 - **`code/.crux.json`** — knowledge about the Crux Mesh Rust codebase: modules, invariants, decisions, gotchas. Write `crux_add_node` here when you learn something durable about the code (a non-obvious constraint, a deliberate design choice, a fix and its reason). Reach for it via `mesh_query` before doing nontrivial work.
 - **`coms/.crux.json`** — messages and channels. Post a `message` node (channel=`general`) when you want to leave a note for future sessions or another agent.
 
+## At session end (and after major mid-session changes)
+
+Before closing a session, or immediately after any significant change (publish, architectural decision, notable fix, repo-level config change), write to the mesh:
+
+1. **`coms/.crux.json`** — post a `message` node summarising what happened. Include: what changed, why, and any state future sessions need to know (commit SHAs, new file locations, decisions made). Use `kind=message`, `tags` matching the topic, and a `summary` of ≤200 chars.
+2. **`code/.crux.json`** — if you learned something durable about the codebase (a non-obvious invariant, a deliberate design choice, a fix and its root cause), add a node there too.
+
+Do not wait until the user asks. If something significant happened this session, write it before the conversation ends.
+
 ## What NOT to write to the mesh
 
 - Ephemeral task state — that's what TodoWrite is for.
