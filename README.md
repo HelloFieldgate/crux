@@ -1,8 +1,8 @@
 # The Crux
 
-> Portable knowledge graph for AI agents — and a hardened MCP router to back it up.
+> A hardened MCP gateway with a built-in knowledge graph — clearance-gated, injection-hardened, and audited.
 
-**Crux Mesh** gives LLM agents structured, queryable memory that persists across sessions. A single `.crux.json` file holds a typed knowledge graph for one domain — a codebase, a contact list, a set of preferences. Multiple cruxes link into a **mesh** for cross-graph queries. The same binary that runs the knowledge graph also acts as a **secure MCP gateway**: clearance-gated, injection-hardened, and backed by a tamper-evident audit chain.
+**Crux Mesh** is a secure MCP router that acts as the single trusted endpoint between your AI agent and every tool it touches. All calls are clearance-gated, injection-scanned, rate-limited, response-sanitized, and appended to a tamper-evident audit chain. The same binary also ships a portable knowledge graph: a single `.crux.json` file holds typed, queryable memory for one domain; link multiple cruxes into a **mesh** for federated cross-graph queries.
 
 Pure Rust. Zero external dependencies.
 
