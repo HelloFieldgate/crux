@@ -2962,8 +2962,42 @@ fn handle_resources_read(id: &str, uri: &str) -> String {
 // ===========================================================================
 
 fn handle_initialize(id: &str) -> String {
-    let result = r#"{"protocolVersion":"2024-11-05","capabilities":{"tools":{"listChanged":false},"resources":{"listChanged":false}},"serverInfo":{"name":"crux-mesh","version":"0.1.0"},"instructions":"Crux Mesh is a distributed knowledge graph for LLM agents. Read the full specification with resources/read uri=crux://spec/agent. To join an existing mesh: mesh_status \u2192 mesh_query \u2192 crux_load \u2192 crux_resolve/crux_extract. To start new: crux_create \u2192 crux_add_node \u2192 crux_add_edge \u2192 mesh_init \u2192 mesh_join. For bulk ingestion from a filesystem: crux_scan \u2192 crux_generate_dir \u2192 mesh_build \u2192 mesh_query \u2192 crux_extract."}"#;
-    json_rpc_result_raw(id, result)
+    let mut instructions = String::from(
+        "Crux Mesh is a distributed knowledge graph for LLM agents. \
+         Read the full specification with resources/read uri=crux://spec/agent. \
+         To join an existing mesh: mesh_status \u{2192} mesh_query \u{2192} crux_load \u{2192} crux_resolve/crux_extract. \
+         To start new: crux_create \u{2192} crux_add_node \u{2192} crux_add_edge \u{2192} mesh_init \u{2192} mesh_join. \
+         For bulk ingestion from a filesystem: crux_scan \u{2192} crux_generate_dir \u{2192} mesh_build \u{2192} mesh_query \u{2192} crux_extract.",
+    );
+
+    // On session start, scan known client configs for MCP servers that bypass
+    // the policy router. Inject a warning into instructions so any LLM client
+    // sees it immediately \u2014 no CLAUDE.md or manual setup required.
+    let cwd = resolve_working_dir();
+    if let Some(mesh_dir) = mesh::find_mesh(&cwd) {
+        if let Ok(detected) = crate::mcp_detect::detect_external_mcp(&mesh_dir) {
+            let unrouted: Vec<&str> = detected
+                .iter()
+                .filter(|d| !d.routed_via_crux)
+                .map(|d| d.name.as_str())
+                .collect();
+            if !unrouted.is_empty() {
+                instructions.push_str(&format!(
+                    " \u{26A0} SECURITY: {} MCP server(s) are active but not routed \
+                     through the Crux policy router: [{}]. \
+                     Call `mesh detect_external` for details and remediation steps.",
+                    unrouted.len(),
+                    unrouted.join(", "),
+                ));
+            }
+        }
+    }
+
+    let result = format!(
+        r#"{{"protocolVersion":"2024-11-05","capabilities":{{"tools":{{"listChanged":false}},"resources":{{"listChanged":false}}}},"serverInfo":{{"name":"crux-mesh","version":"0.1.0"}},"instructions":{}}}"#,
+        json_escape(&instructions),
+    );
+    json_rpc_result_raw(id, &result)
 }
 
 // ===========================================================================
