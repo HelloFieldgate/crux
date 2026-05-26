@@ -61,6 +61,7 @@ css: unocss
 ---
 layout: center
 class: text-center
+title: One Trusted Endpoint
 ---
 
 <div class="text-5xl font-bold text-[#6B83BE] mb-6 leading-tight">
@@ -250,6 +251,7 @@ mesh_query query="auth outage root cause"
 
 ---
 layout: center
+title: Context Without the Firehose
 ---
 
 <div class="text-center">
@@ -293,20 +295,20 @@ layout: center
 
 </div>
 
-<div class="space-y-4 pt-2">
-  <div class="p-4 rounded-lg bg-gray-800/60 border border-gray-700">
+<div class="space-y-2 pt-2">
+  <div class="p-3 rounded-lg bg-gray-800/60 border border-gray-700">
     <strong class="text-[#6B83BE] text-sm">Cross-graph queries</strong><br>
     <span class="text-xs text-gray-300">Ask a question once, get answers from all cruxes in the mesh — filtered by the caller's clearance level automatically.</span>
   </div>
-  <div class="p-4 rounded-lg bg-gray-800/60 border border-gray-700">
+  <div class="p-3 rounded-lg bg-gray-800/60 border border-gray-700">
     <strong class="text-[#6B83BE] text-sm">Clearance clusters</strong><br>
     <span class="text-xs text-gray-300">Group cruxes by sensitivity. An agent with <code>internal</code> clearance never sees <code>restricted</code> crux content — not even node names leak.</span>
   </div>
-  <div class="p-4 rounded-lg bg-gray-800/60 border border-gray-700">
+  <div class="p-3 rounded-lg bg-gray-800/60 border border-gray-700">
     <strong class="text-[#6B83BE] text-sm">Package registry</strong><br>
     <span class="text-xs text-gray-300">Publish and install crux packages with <code>pkg_publish</code> / <code>pkg_install</code>. Share domain knowledge graphs across teams.</span>
   </div>
-  <div class="p-4 rounded-lg bg-gray-800/60 border border-gray-700">
+  <div class="p-3 rounded-lg bg-gray-800/60 border border-gray-700">
     <strong class="text-[#6B83BE] text-sm">Cross-crux edges</strong><br>
     <span class="text-xs text-gray-300">Link nodes across cruxes with typed <code>mesh_link</code> edges. Query semantically across domain boundaries.</span>
   </div>
@@ -706,6 +708,7 @@ export CRUX_CALLER_CLEARANCE=internal
 ---
 layout: center
 class: text-center
+title: Get Started
 ---
 
 <div class="flex flex-col items-center">
