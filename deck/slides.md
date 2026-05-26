@@ -717,7 +717,7 @@ title: Get Started
   <p class="text-xl text-gray-300 mb-8">Open source · Pure Rust · Zero dependencies · v0.2.0</p>
 
   <a href="https://github.com/HelloFieldgate/crux"
-     class="px-10 py-4 rounded-xl bg-[#6B83BE] text-white font-bold text-lg no-underline">
+     class="px-10 py-4 rounded-xl bg-[#6B83BE] hover:bg-[#5a72ad] text-white hover:text-white font-bold text-lg no-underline transition-colors">
     github.com/HelloFieldgate/crux
   </a>
 

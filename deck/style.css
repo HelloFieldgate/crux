@@ -1,0 +1,7 @@
+/* Hide the slides overview panel and its trigger */
+.slidev-nav-goto,
+.slidev-overview,
+.slidev-slides-overview,
+.nav-go-to {
+  display: none !important;
+}
