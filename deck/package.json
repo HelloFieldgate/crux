@@ -3,7 +3,7 @@
   "private": true,
   "scripts": {
     "dev": "slidev slides.md --open",
-    "build": "slidev build slides.md --base /crux/deck/",
+    "build": "slidev build slides.md --base /crux/",
     "export": "slidev export slides.md --output crux-deck.pdf",
     "serve": "serve dist"
   },
