@@ -387,20 +387,20 @@ layout: two-cols
 
 ::right::
 
-<div class="pl-6 pt-12 space-y-4">
-  <div class="p-4 rounded-lg bg-gray-800/60 border border-gray-700">
+<div class="pl-6 pt-6 space-y-2">
+  <div class="p-3 rounded-lg bg-gray-800/60 border border-gray-700">
     <strong class="text-[#6B83BE] text-sm">Auto-redaction</strong><br>
     <span class="text-xs text-gray-300">Above-clearance node names in responses are stripped — not just content. The existence of sensitive data never leaks.</span>
   </div>
-  <div class="p-4 rounded-lg bg-gray-800/60 border border-gray-700">
+  <div class="p-3 rounded-lg bg-gray-800/60 border border-gray-700">
     <strong class="text-[#6B83BE] text-sm">Field-level classification</strong><br>
     <span class="text-xs text-gray-300">Individual fields within a node can be classified separately. Agents see only the fields they're cleared for.</span>
   </div>
-  <div class="p-4 rounded-lg bg-gray-800/60 border border-gray-700">
+  <div class="p-3 rounded-lg bg-gray-800/60 border border-gray-700">
     <strong class="text-[#6B83BE] text-sm">Call blocking</strong><br>
     <span class="text-xs text-gray-300">Calls to servers registered above the caller's clearance are blocked before forwarding — the upstream server never receives them.</span>
   </div>
-  <div class="p-4 rounded-lg bg-[#6B83BE]/10 border border-[#6B83BE]/30">
+  <div class="p-3 rounded-lg bg-[#6B83BE]/10 border border-[#6B83BE]/30">
     <strong class="text-[#6B83BE] text-sm">Cluster-level gating</strong><br>
     <span class="text-xs text-gray-300">An <code>internal</code>-cleared agent querying a <code>restricted</code> cluster gets zero results — not a hint the cluster exists.</span>
   </div>

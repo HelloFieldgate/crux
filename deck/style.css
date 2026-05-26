@@ -1,7 +1,5 @@
-/* Hide the slides overview panel and its trigger */
-.slidev-nav-goto,
-.slidev-overview,
-.slidev-slides-overview,
-.nav-go-to {
+/* Hide the goto dialog (slide list panel) and the overview thumbnail grid trigger */
+#slidev-goto-dialog,
+button[title="Show slide overview"] {
   display: none !important;
 }
