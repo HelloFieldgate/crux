@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Helm — Crux Manager</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="helm.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- Toolbar -->
+  <div id="toolbar">
+    <div class="helm-brand">
+      <img src="crux_icon.svg" class="helm-icon" alt="Helm">
+      <span class="helm-wordmark">Helm</span>
+    </div>
+    <div id="node-filter-bar" style="display:none">
+      <input id="nf-query" type="text" placeholder="Search nodes…">
+      <select id="nf-kind"><option value="">Kind</option></select>
+      <select id="nf-status">
+        <option value="">Status</option>
+        <option>Todo</option>
+        <option>In Progress</option>
+        <option>Done</option>
+        <option>Blocked</option>
+      </select>
+      <input id="nf-tag" type="text" placeholder="Tag…">
+      <select id="nf-sort">
+        <option value="">Sort</option>
+        <option value="name">Name</option>
+        <option value="priority">Priority</option>
+        <option value="created">Created</option>
+      </select>
+      <button class="btn-icon" id="btn-nf-clear" title="Clear filters">✕</button>
+    </div>
+    <span class="status" id="status-bar"></span>
+    <div class="font-size-ctrl">
+      <button class="btn-icon" id="btn-font-dec" title="Decrease font size">−</button>
+      <div style="width: 16px; text-align: center; font-size: var(--fs-11); font-weight: 600;">A</div>
+      <button class="btn-icon" id="btn-font-inc" title="Increase font size">+</button>
+      <button class="btn-icon" id="btn-theme" title="Toggle light/dark mode">☾</button>
+    </div>
+    <div id="view-switcher">
+      <button class="view-btn active" data-view="graph">Graph</button>
+      <button class="view-btn" data-view="board">Board</button>
+      <button class="view-btn" data-view="table">Table</button>
+      <button class="view-btn" data-view="timeline">Timeline</button>
+      <button class="view-btn" data-view="mcp">MCP Servers</button>
+    </div>
+  </div>
+
+  <!-- Sidebar -->
+  <div id="sidebar">
+    <div id="mesh-switcher">
+      <select id="mesh-select" title="Switch mesh"></select>
+      <button class="btn-icon" id="btn-refresh" title="Refresh">↺</button>
+    </div>
+    <div class="sidebar-header">
+      Cruxes
+    </div>
+    <div id="search-wrap">
+      <input id="search-input" type="text" placeholder="Filter cruxes…">
+    </div>
+    <div id="crux-list"></div>
+    <div id="sidebar-footer">
+      <button class="btn-primary" id="btn-new-crux">+ New Crux</button>
+      <button class="btn-icon" id="btn-open-crux" title="Connect existing crux">⊕ Open</button>
+      <button class="btn-icon" id="btn-import-csv" title="Import CSV">⇑ CSV</button>
+      <button class="btn-icon" id="btn-export-md" title="Export as Markdown">↓ MD</button>
+    </div>
+  </div>
+
+  <!-- Graph canvas -->
+  <div id="canvas">
+    <div id="graph-container">
+      <div id="graph-controls">
+        <button class="graph-ctrl-btn" id="btn-fit-view"   title="Fit all nodes (F)">⤢ Fit</button>
+        <button class="graph-ctrl-btn" id="btn-reset-view" title="Reset layout (R)">⟲ Reset</button>
+      </div>
+    </div>
+    <div id="board-container"></div>
+    <div id="table-container"></div>
+    <div id="timeline-container"></div>
+    <div id="mcp-container">
+      <div id="mcp-inner">
+        <div class="mcp-header">
+          <h2>MCP Servers</h2>
+          <div class="mcp-tabs">
+            <button class="mcp-tab active" data-mcp-tab="registered">Registered</button>
+            <button class="mcp-tab" data-mcp-tab="discovered">Discovered</button>
+            <button class="mcp-tab" data-mcp-tab="external">External</button>
+          </div>
+          <button class="btn-primary" id="btn-mcp-register">+ Register</button>
+          <button class="btn-icon" id="btn-mcp-scan" title="Scan for discovered servers">⟳ Scan</button>
+          <button class="btn-icon" id="btn-mcp-refresh" title="Refresh">↺</button>
+        </div>
+        <div id="mcp-table-wrap" class="active"></div>
+        <div id="mcp-discovered-wrap"></div>
+        <div id="mcp-external-wrap"></div>
+      </div>
+    </div>
+    <div id="canvas-empty">
+      <div class="hint">Select a crux to visualise</div>
+      <div class="sub">Nodes and edges will appear here</div>
+    </div>
+    <div id="canvas-loader"><div class="spinner"></div></div>
+
+    <!-- Image lightbox -->
+    <div id="img-lightbox">
+      <button id="img-lightbox-close" title="Close (Esc)">✕</button>
+      <img id="img-lightbox-img" src="" alt="">
+    </div>
+  </div>
+
+  <!-- Inspector resize handle -->
+  <div id="inspector-resizer"></div>
+
+  <!-- Inspector -->
+  <div id="inspector">
+    <div class="inspector-header">Inspector</div>
+    <div id="inspector-body">
+      <div id="inspector-empty">Click a node or edge to inspect it.</div>
+    </div>
+  </div>
+
+</div>
+
+<!-- New Mesh modal -->
+<div id="modal-new-mesh-overlay">
+  <div class="modal">
+    <h2>New Mesh</h2>
+    <div class="field">
+      <label>Mesh name</label>
+      <input id="nm-name" type="text" placeholder="my-project">
+    </div>
+    <div class="field">
+      <label>Directory (will be created if needed)</label>
+      <input id="nm-path" type="text" placeholder="/path/to/directory">
+    </div>
+    <div id="nm-error" style="color:var(--red);font-size:12px;min-height:16px"></div>
+    <div class="modal-buttons">
+      <button class="btn-cancel" id="btn-nm-cancel">Cancel</button>
+      <button class="btn-primary" id="btn-nm-create">Create Mesh</button>
+    </div>
+  </div>
+</div>
+
+<!-- New Crux modal -->
+<div id="modal-overlay">
+  <div class="modal">
+    <h2>New Crux</h2>
+    <div class="field">
+      <label>Name</label>
+      <input id="modal-name" type="text" placeholder="my-crux">
+    </div>
+    <div class="field">
+      <label>Kind</label>
+      <select id="modal-kind">
+        <option value="codebase">Codebase</option>
+        <option value="documentation">Documentation</option>
+        <option value="preferences">Preferences</option>
+        <option value="organization">Organization</option>
+        <option value="dataset">Dataset</option>
+        <option value="policy">Policy</option>
+        <option value="custom">Custom</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Template (optional)</label>
+      <select id="modal-template">
+        <option value="">None — blank crux</option>
+        <option value="project-tracker">Project Tracker</option>
+        <option value="contacts-crm">Contacts / CRM</option>
+        <option value="knowledge-base">Knowledge Base</option>
+        <option value="incident-log">Incident Log</option>
+      </select>
+    </div>
+    <div id="template-preview" class="template-preview"></div>
+    <div class="field">
+      <label>Describe what you want to track <span style="color:var(--text-dim)">(optional — AI generates nodes)</span></label>
+      <textarea id="modal-ai-desc" rows="3" placeholder="e.g. contractor invoices, payment status, and approval workflow"></textarea>
+    </div>
+    <div id="ai-actions" style="display:none">
+      <button class="btn-icon" id="btn-ai-generate">Generate with AI</button>
+      <button class="btn-icon" id="btn-ai-copy">Copy Prompt</button>
+      <span id="ai-status"></span>
+    </div>
+    <div class="field">
+      <label>Source directory (optional — leave blank for empty crux)</label>
+      <input id="modal-source" type="text" placeholder="/path/to/directory">
+    </div>
+    <div id="modal-scan-preview" style="display:none">
+      <div class="section-title">Scan preview</div>
+      <div id="modal-scan-info" style="font-size:12px; color: var(--text-dim);"></div>
+    </div>
+    <div class="modal-buttons">
+      <button class="btn-cancel" id="btn-modal-cancel">Cancel</button>
+      <button class="btn-icon"   id="btn-modal-scan">Scan</button>
+      <button class="btn-primary" id="btn-modal-create">Create</button>
+    </div>
+  </div>
+</div>
+
+<!-- Import CSV modal -->
+<div id="modal-import-csv-overlay">
+  <div class="modal modal-wide">
+    <h2>Import CSV</h2>
+
+    <!-- Step 1: Upload / paste -->
+    <div id="csv-step1">
+      <div class="field">
+        <label>File <span style="color:var(--text-dim)">.csv or .tsv</span></label>
+        <input type="file" id="csv-file-input" accept=".csv,.tsv,.txt">
+      </div>
+      <div class="field">
+        <label>— or paste CSV text —</label>
+        <textarea id="csv-paste-area" rows="5"
+          placeholder="Name,Status,Description&#10;Alice,Todo,Review auth flow&#10;Bob,Done,Deploy staging"></textarea>
+      </div>
+      <div id="csv-step1-error" style="color:var(--red);font-size:12px;min-height:14px"></div>
+    </div>
+
+    <!-- Step 2: Column mapping + options + preview -->
+    <div id="csv-step2" style="display:none">
+      <div class="section-title">Map columns to crux fields</div>
+      <div id="csv-col-map-table"></div>
+      <div class="csv-options">
+        <div class="field">
+          <label>Default node kind</label>
+          <input id="csv-node-kind" type="text" value="record">
+        </div>
+        <div class="field">
+          <label>Target crux</label>
+          <select id="csv-target-crux">
+            <option value="">— Create new crux —</option>
+          </select>
+        </div>
+        <div class="field" id="csv-new-name-field">
+          <label>New crux name</label>
+          <input id="csv-crux-name" type="text" placeholder="my-import">
+        </div>
+      </div>
+      <div class="section-title" style="margin-top:10px">
+        Preview <span id="csv-preview-count" style="color:var(--text-dim)"></span>
+      </div>
+      <div id="csv-preview-table"></div>
+    </div>
+
+    <div id="csv-import-status" style="font-size:12px;min-height:14px;color:var(--text-dim)"></div>
+    <div class="modal-buttons">
+      <button class="btn-cancel"  id="btn-csv-cancel">Cancel</button>
+      <button class="btn-icon"    id="btn-csv-back"   style="display:none">← Back</button>
+      <button class="btn-icon"    id="btn-csv-next">Preview →</button>
+      <button class="btn-primary" id="btn-csv-import" style="display:none">Import</button>
+    </div>
+  </div>
+</div>
+
+<!-- Register MCP Server modal -->
+<div id="modal-mcp-overlay">
+  <div class="modal">
+    <h2>Register MCP Server</h2>
+    <div class="field">
+      <label>Alias <span style="color:var(--text-dim)">(unique routing key)</span></label>
+      <input id="mcp-alias" type="text" placeholder="filesystem">
+    </div>
+    <div class="field">
+      <label>Transport</label>
+      <select id="mcp-transport">
+        <option value="stdio">stdio (subprocess)</option>
+        <option value="http">http (remote URL)</option>
+      </select>
+    </div>
+    <div class="field" id="mcp-command-field">
+      <label>Command <span style="color:var(--text-dim)">(argv string for stdio)</span></label>
+      <input id="mcp-command" type="text" placeholder="my-tool --mcp">
+    </div>
+    <div class="field" id="mcp-url-field" style="display:none">
+      <label>URL <span style="color:var(--text-dim)">(host:port/path for http)</span></label>
+      <input id="mcp-url" type="text" placeholder="localhost:8080/mcp">
+    </div>
+    <div class="field">
+      <label>Required clearance</label>
+      <select id="mcp-clearance">
+        <option value="public">public</option>
+        <option value="internal" selected>internal</option>
+        <option value="confidential">confidential</option>
+        <option value="restricted">restricted</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Allowed tools <span style="color:var(--text-dim)">(comma-separated, or * for all)</span></label>
+      <input id="mcp-tools" type="text" placeholder="*" value="*">
+    </div>
+    <div class="field">
+      <label>Rate limit <span style="color:var(--text-dim)">(N/W format, e.g. 60/60 — leave blank for none)</span></label>
+      <input id="mcp-rate" type="text" placeholder="60/60">
+    </div>
+    <div id="mcp-reg-error" style="color:var(--red);font-size:12px;min-height:16px"></div>
+    <div class="modal-buttons">
+      <button class="btn-cancel" id="btn-mcp-cancel">Cancel</button>
+      <button class="btn-primary" id="btn-mcp-submit">Register</button>
+    </div>
+  </div>
+</div>
+
+<!-- Command palette -->
+<div id="cmd-palette-overlay">
+  <div id="cmd-palette">
+    <div id="cmd-input-wrap">
+      <span id="cmd-icon">⌘</span>
+      <input id="cmd-input" type="text" placeholder="Search nodes across all cruxes…" autocomplete="off" spellcheck="false">
+      <kbd id="cmd-esc-hint">esc</kbd>
+    </div>
+    <div id="cmd-results"></div>
+    <div id="cmd-footer">
+      <span><kbd>↑↓</kbd> navigate</span>
+      <span><kbd>↵</kbd> jump</span>
+      <span><kbd>esc</kbd> close</span>
+    </div>
+  </div>
+</div>
+
+<!-- Connect existing crux modal -->
+<div id="modal-open-crux-overlay">
+  <div class="modal">
+    <h2>Connect Existing Crux</h2>
+    <div class="field">
+      <label>Path to crux directory</label>
+      <input id="open-crux-path" type="text" placeholder="/Users/you/my-project">
+      <div class="hint" style="margin-top:6px;color:var(--text-dim);font-size:12px">
+        Enter the path to a folder that contains a <code>.crux.json</code> file.
+        It will be added to the current mesh.
+      </div>
+    </div>
+    <div id="open-crux-error" style="color:var(--red);font-size:12px;min-height:14px;margin-top:4px"></div>
+    <div class="modal-buttons">
+      <button class="btn-cancel" id="btn-open-cancel">Cancel</button>
+      <button class="btn-primary" id="btn-open-connect">Connect</button>
+    </div>
+  </div>
+</div>
+
+<script src="graph.js"></script>
+<script src="board.js"></script>
+<script src="helm.js"></script>
+</body>
+</html>

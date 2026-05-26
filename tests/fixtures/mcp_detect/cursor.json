@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "cursor-tool": {
+      "command": "/usr/local/bin/cursor-mcp",
+      "args": []
+    }
+  }
+}

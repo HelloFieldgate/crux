@@ -1,0 +1,12 @@
+{
+  "editor.fontSize": 14,
+  "mcp": {
+    "servers": {
+      "vscode-server": {
+        "type": "stdio",
+        "command": "/usr/bin/node",
+        "args": ["/home/user/vscode_mcp_server.js"]
+      }
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "my-echo-server": {
+      "command": "python3",
+      "args": ["/home/user/echo_server.py"],
+      "env": {}
+    },
+    "another-tool": {
+      "command": "/usr/local/bin/my-tool",
+      "args": ["--stdio"]
+    }
+  }
+}

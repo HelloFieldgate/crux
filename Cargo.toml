@@ -1,0 +1,22 @@
+[package]
+name = "crux-mesh"
+version = "0.2.0"
+edition = "2021"
+description = "Distributed knowledge graph mesh for LLM agents"
+license = "MIT"
+
+[[bin]]
+name = "crux"
+path = "src/main.rs"
+
+[[bin]]
+name = "crux-router"
+path = "src/bin/crux_router.rs"
+
+[[bin]]
+name = "helm"
+path = "src/bin/helm.rs"
+
+[lib]
+name = "crux_mesh"
+path = "src/lib.rs"
