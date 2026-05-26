@@ -33,9 +33,6 @@ jobs:
         working-directory: deck
         run: npm install
 
-      - name: Copy icon to public
-        run: cp local/crux_desat.png deck/public/crux_desat.png
-
       - name: Build deck
         working-directory: deck
         run: npm run build
