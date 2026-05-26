@@ -4,6 +4,8 @@
 
 **Crux Mesh** is a secure MCP router that acts as the single trusted endpoint between your AI agent and every tool it touches. All calls are clearance-gated, injection-scanned, rate-limited, response-sanitized, and appended to a tamper-evident audit chain. The same binary also ships a portable knowledge graph: a single `.crux.json` file holds typed, queryable memory for one domain; link multiple cruxes into a **mesh** for federated cross-graph queries.
 
+Agents query for exactly what's relevant — no raw-file dumps bloating the context window.
+
 Pure Rust. Zero external dependencies.
 
 ---
