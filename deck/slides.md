@@ -732,7 +732,7 @@ title: Get Started
     </div>
     <div>
       <div class="text-3xl font-bold text-[#6B83BE]">v0.2.0</div>
-      <div class="text-sm text-gray-400 mt-1">stable release</div>
+      <div class="text-sm text-gray-400 mt-1">and counting</div>
     </div>
   </div>
 </div>
