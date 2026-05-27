@@ -73,10 +73,12 @@ title: One Trusted Endpoint
 </p>
 
 ---
-layout: two-cols
+layout: two-cols-header
 ---
 
 # Architecture
+
+::left::
 
 ### Knowledge Graph
 
