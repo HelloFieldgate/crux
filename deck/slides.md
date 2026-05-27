@@ -708,6 +708,55 @@ export CRUX_CALLER_CLEARANCE=internal
 </div>
 
 ---
+
+# Connect Any Agent
+
+<div class="grid grid-cols-2 gap-8 mt-4">
+
+<div>
+
+**MCP-native clients — one config, any runtime:**
+
+```json
+{
+  "mcpServers": {
+    "crux": {
+      "command": "crux",
+      "args": ["--mcp"]
+    }
+  }
+}
+```
+
+<div class="mt-3 text-sm text-gray-400">Works with: <span class="text-orange-400">Claude Desktop · Claude Code</span> · <span class="text-purple-400">Cursor</span> · <span class="text-cyan-400">Windsurf</span> · <span class="text-indigo-400">Continue</span> · <span class="text-yellow-400">Zed</span></div>
+
+</div>
+
+<div>
+
+**<span class="text-green-400">GPT</span> / <span class="text-blue-400">Gemini</span> / <span class="text-gray-300">Grok</span> / <span class="text-amber-400">open-source</span> — via MCP SDK:**
+
+```python
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+
+server = StdioServerParameters(
+    command="crux", args=["--mcp"]
+)
+async with stdio_client(server) as (r, w):
+    async with ClientSession(r, w) as session:
+        await session.initialize()
+        tools = await session.list_tools()
+        # pass tools to your model of choice
+```
+
+<div class="mt-3 text-sm text-gray-400">Or via framework bridge: <span class="text-[#6B83BE]">LangChain · LlamaIndex · Agno</span></div>
+
+</div>
+
+</div>
+
+---
 layout: center
 class: text-center
 title: Get Started
