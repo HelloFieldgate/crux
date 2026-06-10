@@ -176,18 +176,30 @@ const Helm = (() => {
     let html = `<table class="mcp-table">
       <thead><tr>
         <th>Alias</th><th>Transport</th><th>Clearance</th>
-        <th>Allowed Tools</th><th>Rate Limit</th><th>Audit</th><th></th>
+        <th>Allowed Tools</th><th>Rate Limit</th><th>Auth</th><th></th>
       </tr></thead><tbody>`;
     for (const s of servers) {
       const tBadge = s.transport === 'http' ? 'mcp-badge-http' : 'mcp-badge-stdio';
       const clLevel = { public: 'cl0', internal: 'cl1', confidential: 'cl2', restricted: 'cl3' }[s.required_clearance] || 'cl1';
+      // OAuth auth status badge + buttons
+      let authCell = '<span style="color:var(--text-dim);font-size:11px">—</span>';
+      let authActions = '';
+      if (s.auth === 'oauth2') {
+        const statusClass = { authorized: 'mcp-badge-http', expired: 'mcp-badge-cl2', unauthorized: 'mcp-badge-cl3' }[s.auth_status] || 'mcp-badge-cl3';
+        authCell = `<span class="mcp-badge ${statusClass}">${esc(s.auth_status || 'unauthorized')}</span>`;
+        const btnLabel = s.auth_status === 'authorized' ? 'Re-authorize' : 'Authorize';
+        authActions = `<button class="btn-authorize" onclick="Helm.oauthStart(${JSON.stringify(s.alias)})">${btnLabel}</button>`;
+        if (s.auth_status === 'authorized' || s.auth_status === 'expired') {
+          authActions += ` <button class="btn-revoke-token" onclick="Helm.oauthRevokeToken(${JSON.stringify(s.alias)})">Revoke Token</button>`;
+        }
+      }
       html += `<tr>
         <td><strong>${esc(s.alias)}</strong></td>
         <td><span class="mcp-badge ${tBadge}">${esc(s.transport)}</span></td>
         <td><span class="mcp-badge mcp-badge-${clLevel}">${esc(s.required_clearance || 'internal')}</span></td>
         <td>${esc(s.allowed_tools || '*')}</td>
         <td>${esc(s.rate_limit || '—')}</td>
-        <td>${s.audit_required ? 'yes' : 'no'}</td>
+        <td style="white-space:nowrap">${authCell} ${authActions}</td>
         <td><button class="btn-revoke" onclick="Helm.revokeMcp(${JSON.stringify(s.alias)})">Revoke</button></td>
       </tr>`;
     }
@@ -200,6 +212,43 @@ const Helm = (() => {
     const result = await api('POST', '/api/mcp/revoke', { alias });
     if (result.error) { setStatus('Revoke failed: ' + result.error, true); return; }
     setStatus(`Revoked '${alias}'`);
+    loadMcpServers();
+  }
+
+  // ── OAuth authorization management ─────────────────────────────────────────
+
+  async function oauthStart(alias) {
+    setStatus(`Starting OAuth authorization for '${alias}'…`);
+    const result = await api('POST', '/api/mcp/oauth/start', { alias });
+    if (result.error) { setStatus('OAuth start failed: ' + result.error, true); return; }
+    const authUrl = result.auth_url;
+    if (!authUrl) { setStatus('OAuth start failed: no auth_url returned', true); return; }
+    // Open the authorization URL in a new tab; Helm will handle the redirect callback.
+    window.open(authUrl, '_blank', 'noopener');
+    setStatus(`Opened authorization URL for '${alias}' — complete in your browser, then refresh.`);
+    // Poll for completion (up to 5 minutes, check every 3s)
+    let polls = 0;
+    const maxPolls = 100;
+    const pollId = setInterval(async () => {
+      polls++;
+      if (polls > maxPolls) { clearInterval(pollId); return; }
+      const listResult = await api('GET', '/api/mcp/list');
+      if (listResult.error) return;
+      const servers = listResult.servers || [];
+      const srv = servers.find(s => s.alias === alias);
+      if (srv && srv.auth_status === 'authorized') {
+        clearInterval(pollId);
+        setStatus(`'${alias}' authorized successfully.`);
+        loadMcpServers();
+      }
+    }, 3000);
+  }
+
+  async function oauthRevokeToken(alias) {
+    if (!confirm(`Revoke OAuth token for '${alias}'? The next call will require re-authorization.`)) return;
+    const result = await api('POST', '/api/mcp/oauth/revoke', { alias });
+    if (result.error) { setStatus('Token revoke failed: ' + result.error, true); return; }
+    setStatus(`Token for '${alias}' revoked.`);
     loadMcpServers();
   }
 
@@ -1778,7 +1827,7 @@ const Helm = (() => {
       .replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
-  return { init, revokeMcp, approveMcp, routeExternal };
+  return { init, revokeMcp, approveMcp, routeExternal, oauthStart, oauthRevokeToken };
 })();
 
 document.addEventListener('DOMContentLoaded', Helm.init);

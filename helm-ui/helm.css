@@ -1185,6 +1185,84 @@ tbody tr.selected {
   display: block;
 }
 
+/* ── MCP table cells ───────────────────────────────────────────────── */
+.mcp-empty {
+  padding: 20px;
+  color: var(--text-dim);
+  font-size: var(--fs-13);
+  text-align: center;
+}
+
+.mcp-badge {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: var(--fs-11);
+  font-weight: 600;
+  background: var(--surface2);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+}
+
+.mcp-badge-http   { background: #1e3a5f; color: #93c5fd; border-color: #3b82f6; }
+.mcp-badge-stdio  { background: #1a3a2a; color: #86efac; border-color: #22c55e; }
+.mcp-badge-cl0    { background: #27272a; color: #a1a1aa; border-color: #52525b; }
+.mcp-badge-cl1    { background: #1e3a5f; color: #93c5fd; border-color: #3b82f6; }
+.mcp-badge-cl2    { background: #3b2008; color: #fdba74; border-color: #f97316; }
+.mcp-badge-cl3    { background: #3f0f0f; color: #fca5a5; border-color: #ef4444; }
+
+.btn-revoke {
+  padding: 3px 10px;
+  font-size: var(--fs-11);
+  font-weight: 500;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface2);
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: background 0.12s var(--ease), color 0.12s var(--ease);
+  font-family: inherit;
+}
+.btn-revoke:hover { background: #3f0f0f; color: #fca5a5; border-color: #ef4444; }
+
+.btn-authorize {
+  padding: 3px 10px;
+  font-size: var(--fs-11);
+  font-weight: 500;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+  color: var(--accent);
+  cursor: pointer;
+  transition: background 0.12s var(--ease);
+  font-family: inherit;
+}
+.btn-authorize:hover { background: var(--accent); color: #fff; }
+
+.btn-revoke-token {
+  padding: 3px 10px;
+  font-size: var(--fs-11);
+  font-weight: 500;
+  border: 1px solid #f97316;
+  border-radius: var(--radius);
+  background: #3b200820;
+  color: #fdba74;
+  cursor: pointer;
+  transition: background 0.12s var(--ease);
+  font-family: inherit;
+}
+.btn-revoke-token:hover { background: #3b2008; }
+
+.mcp-instructions {
+  margin: 0;
+  padding: 8px 12px;
+  font-size: var(--fs-11);
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  background: var(--surface2);
+  border-radius: var(--radius);
+}
+
 /* ── Utilities ─────────────────────────────────────────────────────── */
 .section-title {
   font-size: var(--fs-11);

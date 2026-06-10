@@ -1016,19 +1016,162 @@ pub fn handle_mcp_list(mesh_root: &Path) -> Response {
     let mut out = String::from("[");
     for (i, r) in regs.iter().enumerate() {
         if i > 0 { out.push(','); }
+        let auth_status = if r.auth == "oauth2" {
+            let s = crate::oauth::auth_status(&r.alias);
+            json_escape(&s.status)
+        } else {
+            json_escape("none")
+        };
         let _ = write!(
             out,
-            r#"{{"alias":{},"transport":{},"required_clearance":{},"allowed_tools":{},"rate_limit":{},"audit_required":{}}}"#,
+            r#"{{"alias":{},"transport":{},"required_clearance":{},"allowed_tools":{},"rate_limit":{},"audit_required":{},"auth":{},"auth_status":{}}}"#,
             json_escape(&r.alias),
             json_escape(r.transport.as_str()),
             json_escape(r.required_clearance.as_str()),
             json_escape(&r.allowed_tools),
             match &r.rate_limit { Some(rl) => json_escape(rl), None => "null".to_string() },
             r.audit_required,
+            json_escape(&r.auth),
+            auth_status,
         );
     }
     out.push(']');
     Response::ok_json(format!("{{\"servers\":{}}}", out))
+}
+
+// ===========================================================================
+// POST /api/mcp/oauth/start  { alias }
+// ===========================================================================
+
+/// Start a Helm browser OAuth flow for `alias`.
+///
+/// Performs endpoint discovery, generates PKCE params, stores the pending
+/// state (keyed by alias) in `PENDING_OAUTH`, and returns the authorization
+/// URL. The authorization server should redirect to
+/// `GET /oauth/callback?alias=<alias>&code=<code>&state=<state>`.
+pub fn handle_mcp_oauth_start(
+    mesh_root: &Path,
+    req: &Request,
+    helm_port: u16,
+    pending: &std::sync::Mutex<std::collections::HashMap<String, crate::oauth::PendingOAuth>>,
+) -> Response {
+    use crate::mesh::load_mcp_registrations;
+    let body = req.body_str();
+    let alias = match extract_string_value(body, "alias") {
+        Some(a) => a,
+        None => return Response::bad_request("missing 'alias'"),
+    };
+    // Load the registration
+    let regs = load_mcp_registrations(mesh_root);
+    let reg = match regs.iter().find(|r| r.alias == alias) {
+        Some(r) => r,
+        None => return Response::bad_request(&format!("no registration found for alias '{}'", alias)),
+    };
+    if reg.auth != "oauth2" {
+        return Response::bad_request(&format!(
+            "'{}' has auth='{}' — only oauth2 registrations can be authorized",
+            alias, reg.auth
+        ));
+    }
+    let oauth_reg = crate::oauth::OAuthReg::from_schema(reg);
+    match crate::oauth::helm_oauth_start(&alias, &oauth_reg, helm_port) {
+        Ok((auth_url, pending_state)) => {
+            if let Ok(mut map) = pending.lock() {
+                map.insert(alias.clone(), pending_state);
+            }
+            Response::ok_json(format!("{{\"ok\":true,\"auth_url\":{}}}", json_escape(&auth_url)))
+        }
+        Err(e) => Response::server_error(&e),
+    }
+}
+
+// ===========================================================================
+// GET /oauth/callback?alias=X&code=Y&state=Z
+// ===========================================================================
+
+/// Complete a Helm OAuth flow from the AS callback redirect.
+///
+/// Looks up the pending state for `alias`, validates `state`, exchanges the
+/// code for tokens, and serves an HTML success page.
+pub fn handle_oauth_callback(
+    mesh_root: &Path,
+    req: &Request,
+    pending: &std::sync::Mutex<std::collections::HashMap<String, crate::oauth::PendingOAuth>>,
+) -> Response {
+    let alias = match req.query.get("alias") {
+        Some(a) => a.clone(),
+        None => return Response::bad_request("missing 'alias' query parameter"),
+    };
+    let code = match req.query.get("code") {
+        Some(c) => c.clone(),
+        None => return html_error_page("Authorization failed: no code in callback."),
+    };
+    let state = match req.query.get("state") {
+        Some(s) => s.clone(),
+        None => return html_error_page("Authorization failed: no state in callback."),
+    };
+    let pending_state = match pending.lock().ok().and_then(|mut m| m.remove(&alias)) {
+        Some(p) => p,
+        None => return html_error_page(&format!(
+            "Authorization failed: no pending flow for alias '{}'. Did it time out?", alias
+        )),
+    };
+    match crate::oauth::helm_oauth_complete(&pending_state, &code, &state, Some(mesh_root)) {
+        Ok(_) => Response {
+            status: 200,
+            content_type: "text/html",
+            body: HTML_OAUTH_SUCCESS.as_bytes().to_vec(),
+        },
+        Err(e) => html_error_page(&format!("Authorization failed: {}", e)),
+    }
+}
+
+const HTML_OAUTH_SUCCESS: &str = "\
+<!DOCTYPE html><html><head><meta charset=\"UTF-8\">\
+<title>Authorization Successful</title>\
+<style>body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#0a0a0b;color:#e2e8f0}\
+.card{text-align:center;padding:40px;background:#18181b;border:1px solid #27272a;border-radius:12px}\
+h2{color:#4ade80;margin:0 0 12px}p{color:#a1a1aa;margin:0}</style>\
+</head><body><div class=\"card\">\
+<h2>Authorization Successful</h2>\
+<p>You may close this tab and return to Helm.</p>\
+</div></body></html>";
+
+fn html_error_page(msg: &str) -> Response {
+    let body = format!(
+        "<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>Authorization Failed</title>\
+         <style>body{{font-family:system-ui,sans-serif;display:flex;align-items:center;\
+         justify-content:center;height:100vh;margin:0;background:#0a0a0b;color:#e2e8f0}}\
+         .card{{text-align:center;padding:40px;background:#18181b;\
+         border:1px solid #27272a;border-radius:12px}}\
+         h2{{color:#f87171;margin:0 0 12px}}p{{color:#a1a1aa;margin:0}}</style>\
+         </head><body><div class=\"card\">\
+         <h2>Authorization Failed</h2><p>{}</p>\
+         </div></body></html>",
+        msg
+    );
+    Response { status: 400, content_type: "text/html", body: body.into_bytes() }
+}
+
+// ===========================================================================
+// POST /api/mcp/oauth/revoke  { alias }
+// ===========================================================================
+
+/// Revoke (delete) the stored OAuth token for `alias`.
+pub fn handle_mcp_oauth_revoke(mesh_root: &Path, req: &Request) -> Response {
+    let _ = mesh_root; // unused — token store is per-alias, not per-mesh
+    let body = req.body_str();
+    let alias = match extract_string_value(body, "alias") {
+        Some(a) => a,
+        None => return Response::bad_request("missing 'alias'"),
+    };
+    match crate::oauth::revoke_token(&alias) {
+        Ok(()) => Response::ok_json(format!(
+            "{{\"ok\":true,\"message\":{}}}",
+            json_escape(&format!("Token for '{}' revoked — next call will require re-authorization.", alias))
+        )),
+        Err(e) => Response::server_error(&e),
+    }
 }
 
 pub fn handle_mcp_register(mesh_root: &Path, req: &Request) -> Response {
@@ -1042,9 +1185,18 @@ pub fn handle_mcp_register(mesh_root: &Path, req: &Request) -> Response {
     let tools     = extract_string_value(body, "allowed_tools")
         .unwrap_or_else(|| "*".to_string());
     let rate      = extract_string_value(body, "rate_limit").unwrap_or_default();
+    let oauth     = crate::schema::OAuthConfig {
+        auth:                   extract_string_value(body, "auth").unwrap_or_else(|| "none".to_string()),
+        client_id:              extract_string_value(body, "oauth_client_id").unwrap_or_default(),
+        scopes:                 extract_string_value(body, "oauth_scopes").unwrap_or_default(),
+        discovery_url:          extract_string_value(body, "oauth_discovery_url").unwrap_or_default(),
+        authorization_endpoint: extract_string_value(body, "oauth_authorization_endpoint").unwrap_or_default(),
+        token_endpoint:         extract_string_value(body, "oauth_token_endpoint").unwrap_or_default(),
+        registration_endpoint:  extract_string_value(body, "oauth_registration_endpoint").unwrap_or_default(),
+    };
 
     match crate::mesh::mesh_register_mcp(
-        mesh_root, &alias, &transport, &command, &url, &clearance, &tools, &rate,
+        mesh_root, &alias, &transport, &command, &url, &clearance, &tools, &rate, &oauth,
     ) {
         Ok(msg) => Response::ok_json(format!("{{\"ok\":true,\"message\":{}}}", json_escape(&msg))),
         Err(e)  => Response::server_error(&e),
@@ -1161,6 +1313,7 @@ pub fn handle_mcp_route_external(mesh_root: &Path, req: &Request) -> Response {
     match crate::mesh::mesh_register_mcp_with_source(
         mesh_root, &det.name, &det.transport,
         &det.command, &det.url, "internal", "*", "", &source,
+        &crate::schema::OAuthConfig::default(),
     ) {
         Ok(msg) => Response::ok_json(format!("{{\"ok\":true,\"message\":{}}}", json_escape(&msg))),
         Err(e)  => Response::server_error(&e),

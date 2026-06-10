@@ -23,6 +23,7 @@ use crate::helm::api::{
     handle_mcp_list, handle_mcp_register, handle_mcp_revoke,
     handle_mcp_discovered, handle_mcp_scan, handle_mcp_approve,
     handle_mcp_external, handle_mcp_route_external,
+    handle_mcp_oauth_start, handle_oauth_callback, handle_mcp_oauth_revoke,
 };
 use crate::helm::assets::{BOARD_JS, CRUX_ICON, CRUX_ICON_SVG, GRAPH_JS, HELM_CSS, HELM_JS, INDEX_HTML};
 use crate::json::json_escape;
@@ -162,12 +163,16 @@ pub fn serve(initial_mesh: Option<PathBuf>) {
         save_last_mesh(root);
     }
     let mesh_root: Arc<Mutex<Option<PathBuf>>> = Arc::new(Mutex::new(initial_mesh));
+    // Pending OAuth PKCE flows keyed by alias (alias → PendingOAuth).
+    let pending_oauth: Arc<Mutex<std::collections::HashMap<String, crate::oauth::PendingOAuth>>> =
+        Arc::new(Mutex::new(std::collections::HashMap::new()));
 
     for stream in listener.incoming() {
         match stream {
             Ok(mut stream) => {
                 let _ = stream.set_nodelay(true);
-                let mesh_root = Arc::clone(&mesh_root);
+                let mesh_root    = Arc::clone(&mesh_root);
+                let pending_oauth = Arc::clone(&pending_oauth);
                 thread::spawn(move || {
                     let req = match parse_request(&mut stream) {
                         Some(r) => r,
@@ -175,7 +180,7 @@ pub fn serve(initial_mesh: Option<PathBuf>) {
                     };
                     let resp = {
                         let mut guard = mesh_root.lock().unwrap();
-                        route(&req, &mut guard)
+                        route(&req, &mut guard, &pending_oauth)
                     };
                     write_response(&mut stream, resp);
                 });
@@ -185,7 +190,11 @@ pub fn serve(initial_mesh: Option<PathBuf>) {
     }
 }
 
-fn route(req: &crate::helm::http::Request, mesh_root: &mut Option<PathBuf>) -> Response {
+fn route(
+    req: &crate::helm::http::Request,
+    mesh_root: &mut Option<PathBuf>,
+    pending_oauth: &std::sync::Mutex<std::collections::HashMap<String, crate::oauth::PendingOAuth>>,
+) -> Response {
     let path  = req.path.as_str();
     let method = req.method.as_str();
 
@@ -198,6 +207,14 @@ fn route(req: &crate::helm::http::Request, mesh_root: &mut Option<PathBuf>) -> R
         ("GET", "/crux_icon.png")  => return Response::ok_png(CRUX_ICON),
         ("GET", "/crux_icon.svg")  => return Response::ok_svg(CRUX_ICON_SVG),
         _ => {}
+    }
+
+    // OAuth callback — does not mutate mesh_root, but needs pending_oauth
+    if method == "GET" && path == "/oauth/callback" {
+        return match mesh_root {
+            Some(root) => handle_oauth_callback(root, req, pending_oauth),
+            None => Response::server_error("no mesh configured"),
+        };
     }
 
     // Endpoints that can mutate mesh_root — must come before the root borrow below
@@ -253,6 +270,8 @@ fn route(req: &crate::helm::http::Request, mesh_root: &mut Option<PathBuf>) -> R
         ("POST", "/api/mcp/approve")       => handle_mcp_approve(root, req),
         ("GET",  "/api/mcp/external")      => handle_mcp_external(root),
         ("POST", "/api/mcp/route_external")=> handle_mcp_route_external(root, req),
+        ("POST", "/api/mcp/oauth/start")   => handle_mcp_oauth_start(root, req, PORT, pending_oauth),
+        ("POST", "/api/mcp/oauth/revoke")  => handle_mcp_oauth_revoke(root, req),
         ("POST", "/api/crux/join")          => handle_join_crux(root, req),
         _ => Response::not_found(),
     }
