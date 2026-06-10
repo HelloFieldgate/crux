@@ -65,13 +65,16 @@ const UNIFIED_TOOLS: &[(&str, &str, &str)] = &[
             "  diff           — show changes since a timestamp (requires since; optional mesh_path)\n",
             "  create_cluster — create an access-control cluster (requires name; optional classification, policy, mesh_path)\n",
             "  assign_cluster    — assign a crux to a cluster (requires identifier, cluster; optional mesh_path)\n",
-            "  register_mcp      — register an external MCP server in the policy crux (requires alias, transport; optional command, url, required_clearance, allowed_tools, rate_limit, mesh_path)\n",
+            "  register_mcp      — register an external MCP server in the policy crux (requires alias, transport; optional command, url, required_clearance, allowed_tools, rate_limit, auth, oauth_client_id, oauth_scopes, oauth_discovery_url, oauth_authorization_endpoint, oauth_token_endpoint, oauth_registration_endpoint, mesh_path)\n",
             "  list_mcp_servers  — list all active MCP server registrations (optional mesh_path)\n",
             "  revoke_mcp        — soft-delete an MCP server registration by alias (requires alias; optional mesh_path)\n",
             "  push              — copy nodes+edges from src into dst, filtering by clearance (requires src, dst; optional mesh_path)\n",
-            "  pull              — copy nodes+edges from src into dst, filtering by clearance (requires src, dst; optional mesh_path)"
+            "  pull              — copy nodes+edges from src into dst, filtering by clearance (requires src, dst; optional mesh_path)\n",
+            "  auth_status       — show OAuth token status for a registered alias: authorized/expired/unauthorized (requires alias; optional mesh_path)\n",
+            "  trigger_auth      — run PKCE authorization-code flow for an OAuth2 alias; prints auth URL, waits for browser callback (requires alias; optional mesh_path)\n",
+            "  oauth_revoke      — delete stored OAuth token for an alias from the encrypted token store (requires alias)"
         ),
-        r#"{"type":"object","properties":{"action":{"type":"string","description":"init|join|leave|status|query|build|diff|create_cluster|assign_cluster|register_mcp|list_mcp_servers|revoke_mcp|push|pull"},"name":{"type":"string","description":"Mesh or cluster name"},"path":{"type":"string","description":"Directory path (for init)"},"crux_path":{"type":"string","description":"Path to crux to join (for join)"},"mesh_path":{"type":"string","description":"Mesh directory (defaults to searching from cwd)"},"identifier":{"type":"string","description":"Crux name or ID (for leave/assign_cluster)"},"query":{"type":"string","description":"Substring filter on name/kind/tags/summary (for query)"},"filter_kind":{"type":"string","description":"Exact node kind filter (for query)"},"filter_status":{"type":"string","description":"Exact planning.status filter (for query)"},"tag":{"type":"string","description":"Exact tag match, case-insensitive (for query)"},"property":{"type":"string","description":"Property filter: key=value, key>N, or key<N (for query)"},"sort":{"type":"string","description":"Sort order: priority|name|created (for query)"},"limit":{"type":"integer","description":"Max results (for query, default 50)"},"crux_dir":{"type":"string","description":"Directory of cruxes to join (for build)"},"output_dir":{"type":"string","description":"Where to create mesh manifest (for build)"},"since":{"type":"integer","description":"Unix timestamp for diff (0 = all)"},"classification":{"type":"string","description":"Security classification (for create_cluster)"},"policy":{"type":"string","description":"Cross-cluster policy: allow|deny|filtered (for create_cluster)"},"cluster":{"type":"string","description":"Cluster name (for assign_cluster)"},"alias":{"type":"string","description":"Unique routing key for the MCP server (for register_mcp/revoke_mcp)"},"transport":{"type":"string","description":"Transport: stdio or http (for register_mcp)"},"command":{"type":"string","description":"Argv string for stdio transport (for register_mcp)"},"url":{"type":"string","description":"Base URL for http transport (for register_mcp)"},"required_clearance":{"type":"string","description":"Minimum caller clearance: public|internal|confidential|restricted (for register_mcp)"},"allowed_tools":{"type":"string","description":"Comma-separated tool names to forward, or * for all (for register_mcp)"},"rate_limit":{"type":"string","description":"Optional rate limit: N/W = max N calls per W-second window, e.g. 60/60 (for register_mcp)"},"src":{"type":"string","description":"Source crux name, id, or path (for push/pull)"},"dst":{"type":"string","description":"Destination crux name, id, or path (for push/pull)"}},"required":["action"]}"#,
+        r#"{"type":"object","properties":{"action":{"type":"string","description":"init|join|leave|status|query|build|diff|create_cluster|assign_cluster|register_mcp|list_mcp_servers|revoke_mcp|push|pull|auth_status|trigger_auth|oauth_revoke"},"name":{"type":"string","description":"Mesh or cluster name"},"path":{"type":"string","description":"Directory path (for init)"},"crux_path":{"type":"string","description":"Path to crux to join (for join)"},"mesh_path":{"type":"string","description":"Mesh directory (defaults to searching from cwd)"},"identifier":{"type":"string","description":"Crux name or ID (for leave/assign_cluster)"},"query":{"type":"string","description":"Substring filter on name/kind/tags/summary (for query)"},"filter_kind":{"type":"string","description":"Exact node kind filter (for query)"},"filter_status":{"type":"string","description":"Exact planning.status filter (for query)"},"tag":{"type":"string","description":"Exact tag match, case-insensitive (for query)"},"property":{"type":"string","description":"Property filter: key=value, key>N, or key<N (for query)"},"sort":{"type":"string","description":"Sort order: priority|name|created (for query)"},"limit":{"type":"integer","description":"Max results (for query, default 50)"},"crux_dir":{"type":"string","description":"Directory of cruxes to join (for build)"},"output_dir":{"type":"string","description":"Where to create mesh manifest (for build)"},"since":{"type":"integer","description":"Unix timestamp for diff (0 = all)"},"classification":{"type":"string","description":"Security classification (for create_cluster)"},"policy":{"type":"string","description":"Cross-cluster policy: allow|deny|filtered (for create_cluster)"},"cluster":{"type":"string","description":"Cluster name (for assign_cluster)"},"alias":{"type":"string","description":"Unique routing key for the MCP server (for register_mcp/revoke_mcp)"},"transport":{"type":"string","description":"Transport: stdio or http (for register_mcp)"},"command":{"type":"string","description":"Argv string for stdio transport (for register_mcp)"},"url":{"type":"string","description":"Base URL for http transport (for register_mcp)"},"required_clearance":{"type":"string","description":"Minimum caller clearance: public|internal|confidential|restricted (for register_mcp)"},"allowed_tools":{"type":"string","description":"Comma-separated tool names to forward, or * for all (for register_mcp)"},"rate_limit":{"type":"string","description":"Optional rate limit: N/W = max N calls per W-second window, e.g. 60/60 (for register_mcp)"},"auth":{"type":"string","description":"Authentication: none (default) or oauth2 (for register_mcp)"},"oauth_client_id":{"type":"string","description":"OAuth 2.1 client ID (for register_mcp with auth=oauth2)"},"oauth_scopes":{"type":"string","description":"Space-separated OAuth scopes per RFC 6749 §3.3 (for register_mcp with auth=oauth2)"},"oauth_discovery_url":{"type":"string","description":"RFC 9728/8414 authorization server metadata URL (for register_mcp with auth=oauth2)"},"oauth_authorization_endpoint":{"type":"string","description":"Explicit authorization endpoint, used when oauth_discovery_url is empty (for register_mcp with auth=oauth2)"},"oauth_token_endpoint":{"type":"string","description":"Token endpoint (for register_mcp with auth=oauth2)"},"oauth_registration_endpoint":{"type":"string","description":"Dynamic Client Registration endpoint per RFC 7591 (for register_mcp with auth=oauth2)"},"src":{"type":"string","description":"Source crux name, id, or path (for push/pull)"},"dst":{"type":"string","description":"Destination crux name, id, or path (for push/pull)"}},"required":["action"]}"#,
     ),
     (
         "pkg",
@@ -393,6 +396,9 @@ fn dispatch_tool(name: &str, args: &str) -> Result<String, String> {
         ("mesh", "revoke_mcp")       => tool_mesh_revoke_mcp(args),
         ("mesh", "push")             => tool_mesh_push(args),
         ("mesh", "pull")             => tool_mesh_pull(args),
+        ("mesh", "auth_status")      => tool_mesh_auth_status(args),
+        ("mesh", "trigger_auth")     => tool_mesh_trigger_auth(args),
+        ("mesh", "oauth_revoke")     => tool_mesh_oauth_revoke(args),
         ("mesh", "verify")           => tool_mesh_verify(args),
         ("mesh", "discover")         => tool_mesh_discover(args),
         ("mesh", "list_discovered")  => tool_mesh_list_discovered(args),
@@ -877,6 +883,7 @@ fn tool_mesh_route_external(args: &str) -> Result<String, String> {
     mesh::mesh_register_mcp_with_source(
         &mesh_dir, &det.name, &det.transport,
         &det.command, &det.url, clearance, tools, rate, &source,
+        &crate::schema::OAuthConfig::default(),
     )?;
     Ok(format!(
         "Staged '{}' as a proposed registration (status=proposed, source={}).\n\
@@ -1180,6 +1187,15 @@ fn tool_mesh_register_mcp(args: &str) -> Result<String, String> {
     let allowed_tools = extract_string_value(args, "allowed_tools")
         .unwrap_or_else(|| "*".to_string());
     let rate_limit = extract_string_value(args, "rate_limit").unwrap_or_default();
+    let oauth = crate::schema::OAuthConfig {
+        auth: extract_string_value(args, "auth").unwrap_or_else(|| "none".to_string()),
+        client_id: extract_string_value(args, "oauth_client_id").unwrap_or_default(),
+        scopes: extract_string_value(args, "oauth_scopes").unwrap_or_default(),
+        discovery_url: extract_string_value(args, "oauth_discovery_url").unwrap_or_default(),
+        authorization_endpoint: extract_string_value(args, "oauth_authorization_endpoint").unwrap_or_default(),
+        token_endpoint: extract_string_value(args, "oauth_token_endpoint").unwrap_or_default(),
+        registration_endpoint: extract_string_value(args, "oauth_registration_endpoint").unwrap_or_default(),
+    };
     let mesh_dir = match extract_string_value(args, "mesh_path") {
         Some(p) => PathBuf::from(p),
         None => {
@@ -1190,7 +1206,7 @@ fn tool_mesh_register_mcp(args: &str) -> Result<String, String> {
 
     let result = mesh::mesh_register_mcp(
         &mesh_dir, &alias, &transport, &command, &url,
-        &required_clearance, &allowed_tools, &rate_limit,
+        &required_clearance, &allowed_tools, &rate_limit, &oauth,
     )?;
 
     let manifest = mesh::load_mesh(&mesh_dir)?;
@@ -1304,6 +1320,87 @@ fn tool_mesh_pull(args: &str) -> Result<String, String> {
         ..Default::default()
     });
     Ok(result)
+}
+
+// ===========================================================================
+// OAuth management tools (Phase 7)
+// ===========================================================================
+
+fn tool_mesh_auth_status(args: &str) -> Result<String, String> {
+    let alias = extract_string_value(args, "alias")
+        .ok_or_else(|| "Missing required parameter: alias".to_string())?;
+    let status = crate::oauth::auth_status(&alias);
+    let mut out = format!("alias: {}\nstatus: {}", status.alias, status.status);
+    if let Some(exp) = status.expires_at {
+        let now = crate::schema::now_unix();
+        if exp > now {
+            let secs = exp - now;
+            out.push_str(&format!("\nexpires_in: {}s (~{}m)", secs, secs / 60));
+        } else {
+            out.push_str(&format!("\nexpired_since: {}s ago", now - exp));
+        }
+    }
+    if let Some(sc) = &status.scopes {
+        out.push_str(&format!("\nscopes: {}", sc));
+    }
+    Ok(out)
+}
+
+fn tool_mesh_trigger_auth(args: &str) -> Result<String, String> {
+    let alias = extract_string_value(args, "alias")
+        .ok_or_else(|| "Missing required parameter: alias".to_string())?;
+
+    // Resolve mesh_dir and load the registration
+    let mesh_dir = match extract_string_value(args, "mesh_path") {
+        Some(p) => PathBuf::from(p),
+        None => {
+            let cwd = resolve_working_dir();
+            mesh::find_mesh(&cwd).ok_or_else(|| "No mesh found.".to_string())?
+        }
+    };
+    let policy_crux_dir = {
+        let manifest = mesh::load_mesh(&mesh_dir)?;
+        let pm = manifest.members.iter()
+            .find(|m| m.crux_kind == schema::CruxKind::Policy)
+            .ok_or_else(|| "No policy crux in mesh".to_string())?;
+        mesh_dir.join(&pm.path)
+    };
+    let policy_db = schema::load_crux_db(&policy_crux_dir)?;
+    let all_regs = schema::parse_all_mcp_server_registrations(&policy_db);
+    let reg = all_regs.iter()
+        .find(|r| r.alias == alias)
+        .ok_or_else(|| format!("No registration found for alias '{}'", alias))?;
+
+    if reg.auth != "oauth2" {
+        return Err(format!(
+            "Registration '{}' has auth='{}' — must be 'oauth2' to use trigger_auth",
+            alias, reg.auth
+        ));
+    }
+
+    let oauth_reg = crate::oauth::OAuthReg::from_schema(reg);
+    // Paste fallback params
+    let preauth_code     = extract_string_value(args, "code");
+    let preauth_state    = extract_string_value(args, "state");
+    let preauth_verifier = extract_string_value(args, "code_verifier");
+    let preauth_redirect = extract_string_value(args, "redirect_uri");
+
+    crate::oauth::authorize(
+        &alias,
+        &oauth_reg,
+        preauth_code.as_deref(),
+        preauth_state.as_deref(),
+        preauth_verifier.as_deref(),
+        preauth_redirect.as_deref(),
+        Some(&mesh_dir),
+    )
+}
+
+fn tool_mesh_oauth_revoke(args: &str) -> Result<String, String> {
+    let alias = extract_string_value(args, "alias")
+        .ok_or_else(|| "Missing required parameter: alias".to_string())?;
+    crate::oauth::revoke_token(&alias)?;
+    Ok(format!("OAuth token for '{}' revoked — next call will require re-authorization.", alias))
 }
 
 // ===========================================================================
@@ -3393,7 +3490,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
 
         mesh::init_mesh("selfsig-mesh", &dir).unwrap();
-        mesh::mesh_register_mcp(&dir, "sig-server", "stdio", "my-tool --mcp", "", "internal", "*", "").unwrap();
+        mesh::mesh_register_mcp(&dir, "sig-server", "stdio", "my-tool --mcp", "", "internal", "*", "", &crate::schema::OAuthConfig::default()).unwrap();
 
         let result = tool_mesh_verify(&format!(r#"{{"mesh_path":"{}"}}"#, dir.display()));
         assert!(result.is_ok(), "mesh verify should succeed: {:?}", result);
