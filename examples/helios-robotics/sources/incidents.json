@@ -1,0 +1,181 @@
+{
+  "crux_version": 2,
+  "crux_id": "sha256:helios-incidents-demo-crux-001",
+  "crux_name": "incidents",
+  "crux_kind": "dataset",
+  "crux_origin": "manual",
+  "created_at": 1746100000,
+  "last_modified_at": 1746100000,
+  "mesh_memberships": [],
+  "modules": [],
+  "domains": [],
+  "nodes": [
+    {
+      "node_id": "sha256:incident-db-outage-20260412",
+      "name": "DB Outage - 2026-04-12",
+      "kind": "incident",
+      "module": "postmortem",
+      "summary": "Primary auth database became unavailable for 23 minutes due to a failed index rebuild. 100% of login attempts failed during the window.",
+      "schema": { "inputs": [], "outputs": [] },
+      "tags": ["incident", "p1", "database", "auth"],
+      "reach": [],
+      "properties": [
+        "incident_date=2026-04-12",
+        "severity=critical",
+        "duration_minutes=23",
+        "services_affected=auth-service",
+        "root_cause=index rebuild deadlock",
+        "resolved_by=Alice Chen"
+      ],
+      "warnings": [],
+      "planning": {
+        "status": "done",
+        "priority": 1,
+        "depends": [],
+        "updated_at": 1744502400,
+        "planned_for_update": false
+      },
+      "security": {
+        "classification": "confidential",
+        "redact_below": null
+      },
+      "content_hash": "sha256:incident-db-outage-hash",
+      "deleted_at": null
+    },
+    {
+      "node_id": "sha256:incident-auth-latency-20260328",
+      "name": "Auth Service Latency - 2026-03-28",
+      "kind": "incident",
+      "module": "postmortem",
+      "summary": "Auth service p99 latency spiked to 4.2 seconds for 45 minutes following a bad deployment. No data loss; operator logins timed out.",
+      "schema": { "inputs": [], "outputs": [] },
+      "tags": ["incident", "p2", "latency", "auth"],
+      "reach": [],
+      "properties": [
+        "incident_date=2026-03-28",
+        "severity=high",
+        "duration_minutes=45",
+        "services_affected=auth-service,web-ui",
+        "root_cause=connection pool exhaustion after deploy",
+        "resolved_by=Bob Singh"
+      ],
+      "warnings": [],
+      "planning": {
+        "status": "done",
+        "priority": 2,
+        "depends": [],
+        "updated_at": 1743120000,
+        "planned_for_update": false
+      },
+      "security": {
+        "classification": "confidential",
+        "redact_below": null
+      },
+      "content_hash": "sha256:incident-auth-latency-hash",
+      "deleted_at": null
+    },
+    {
+      "node_id": "sha256:incident-telemetry-lag-20260214",
+      "name": "Telemetry Lag - 2026-02-14",
+      "kind": "incident",
+      "module": "postmortem",
+      "summary": "Telemetry pipeline fell 8 minutes behind real-time ingestion due to a Kafka partition rebalance during peak load. No data loss.",
+      "schema": { "inputs": [], "outputs": [] },
+      "tags": ["incident", "p2", "telemetry", "kafka"],
+      "reach": [],
+      "properties": [
+        "incident_date=2026-02-14",
+        "severity=medium",
+        "duration_minutes=12",
+        "services_affected=telemetry-pipeline",
+        "root_cause=kafka partition rebalance under load",
+        "resolved_by=Maria Reyes"
+      ],
+      "warnings": [],
+      "planning": {
+        "status": "done",
+        "priority": 3,
+        "depends": [],
+        "updated_at": 1739484000,
+        "planned_for_update": false
+      },
+      "security": {
+        "classification": "internal",
+        "redact_below": null
+      },
+      "content_hash": "sha256:incident-telemetry-lag-hash",
+      "deleted_at": null
+    },
+    {
+      "node_id": "sha256:incident-inventory-sync-20260109",
+      "name": "Inventory Sync Failure - 2026-01-09",
+      "kind": "incident",
+      "module": "postmortem",
+      "summary": "Fleet inventory went stale for 18 minutes when the sync job failed silently after a schema migration. Operators saw outdated robot statuses.",
+      "schema": { "inputs": [], "outputs": [] },
+      "tags": ["incident", "p2", "inventory", "migration"],
+      "reach": [],
+      "properties": [
+        "incident_date=2026-01-09",
+        "severity=medium",
+        "duration_minutes=18",
+        "services_affected=inventory-service",
+        "root_cause=schema migration broke silent sync job",
+        "resolved_by=Bob Singh"
+      ],
+      "warnings": [],
+      "planning": {
+        "status": "done",
+        "priority": 3,
+        "depends": [],
+        "updated_at": 1736380800,
+        "planned_for_update": false
+      },
+      "security": {
+        "classification": "internal",
+        "redact_below": null
+      },
+      "content_hash": "sha256:incident-inventory-sync-hash",
+      "deleted_at": null
+    },
+    {
+      "node_id": "sha256:incident-key-rotation-20251215",
+      "name": "Security Key Rotation - 2025-12-15",
+      "kind": "incident",
+      "module": "postmortem",
+      "summary": "Expired signing keys caused robot authentication to fail for 7 minutes across two regions. Affects all active deployments. Handled under restricted classification.",
+      "schema": { "inputs": [], "outputs": [] },
+      "tags": ["incident", "p1", "security", "credentials"],
+      "reach": [],
+      "properties": [
+        "incident_date=2025-12-15",
+        "severity=critical",
+        "duration_minutes=7",
+        "services_affected=auth-service,telemetry-pipeline",
+        "root_cause=key rotation job missed due to holiday freeze",
+        "resolved_by=Leila Ahmadi"
+      ],
+      "warnings": [],
+      "planning": {
+        "status": "done",
+        "priority": 1,
+        "depends": [],
+        "updated_at": 1734264000,
+        "planned_for_update": false
+      },
+      "security": {
+        "classification": "restricted",
+        "redact_below": "confidential"
+      },
+      "content_hash": "sha256:incident-key-rotation-hash",
+      "deleted_at": null
+    }
+  ],
+  "edges": [
+    { "edge_id": "sha256:edge-dboutage-authservice", "src": "DB Outage - 2026-04-12", "dst": "Auth Service", "kind": "mesh_link", "weight": 1.0, "detail": "root cause in", "cross_crux": true, "binding": "cause", "created_at": 1744502400, "dangling": false },
+    { "edge_id": "sha256:edge-dboutage-alicechen", "src": "DB Outage - 2026-04-12", "dst": "Alice Chen", "kind": "mesh_link", "weight": 1.0, "detail": "resolved by", "cross_crux": true, "binding": "responder", "created_at": 1744502400, "dangling": false },
+    { "edge_id": "sha256:edge-authlatency-authservice", "src": "Auth Service Latency - 2026-03-28", "dst": "Auth Service", "kind": "mesh_link", "weight": 1.0, "detail": "service affected", "cross_crux": true, "binding": "cause", "created_at": 1743120000, "dangling": false },
+    { "edge_id": "sha256:edge-authlatency-bobsingh", "src": "Auth Service Latency - 2026-03-28", "dst": "Bob Singh", "kind": "mesh_link", "weight": 1.0, "detail": "resolved by", "cross_crux": true, "binding": "responder", "created_at": 1743120000, "dangling": false },
+    { "edge_id": "sha256:edge-keyrotation-leilaahmadi", "src": "Security Key Rotation - 2025-12-15", "dst": "Leila Ahmadi", "kind": "mesh_link", "weight": 1.0, "detail": "resolved by", "cross_crux": true, "binding": "responder", "created_at": 1734264000, "dangling": false }
+  ]
+}

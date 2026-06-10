@@ -1,0 +1,13 @@
+name,email,role,department,hire_date,location
+Alice Chen,alice.chen@helios.example,Engineering Lead,Engineering,2023-01-15,Boston
+Bob Singh,bob.singh@helios.example,Platform Architect,Engineering,2022-09-01,Austin
+Maria Reyes,maria.reyes@helios.example,Senior Engineer,Engineering,2023-06-12,Remote
+Priya Patel,priya.patel@helios.example,Frontend Engineer,Engineering,2024-02-20,San Francisco
+James Okafor,james.okafor@helios.example,DevOps Engineer,Infrastructure,2023-03-08,Austin
+Leila Ahmadi,leila.ahmadi@helios.example,Security Engineer,Infrastructure,2022-11-14,Boston
+Tom Nakamura,tom.nakamura@helios.example,QA Engineer,Engineering,2024-05-01,Remote
+Sandra Wu,sandra.wu@helios.example,CTO,Executive,2021-08-01,Boston
+Daniel Brooks,daniel.brooks@helios.example,CEO,Executive,2020-04-15,Boston
+Yuki Tanaka,yuki.tanaka@helios.example,Head of Product,Product,2022-01-10,San Francisco
+Fiona Walsh,fiona.walsh@helios.example,Product Manager,Product,2023-09-25,Remote
+Raj Desai,raj.desai@helios.example,Data Analyst,Analytics,2024-01-07,Austin

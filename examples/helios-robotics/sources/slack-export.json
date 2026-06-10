@@ -1,0 +1,10 @@
+[
+  {"user": "alice", "text": "Heads up: shipping auth service v2.4.1 to staging today. Includes the connection pool fix from the March incident.", "ts": "1746020400.000001", "channel": "engineering"},
+  {"user": "bob", "text": "Looks good on my end. Pool limit is now configurable — I set it to 150 for staging, we can tune in prod after the soak.", "ts": "1746022200.000002", "channel": "engineering"},
+  {"user": "maria", "text": "Telemetry pipeline is holding steady at 48k events/sec in staging. No rebalance issues. Kafka partition count was the fix.", "ts": "1746024000.000003", "channel": "engineering"},
+  {"user": "alice", "text": "Staging soak started. 48hr window. No deploys to prod until Thursday. Ping me if anything looks off in the dashboards.", "ts": "1746025800.000004", "channel": "engineering"},
+  {"user": "daniel", "text": "All hands this Friday at 3pm ET. We will be announcing the Series B close. Please keep this internal until then.", "ts": "1745934000.000005", "channel": "general"},
+  {"user": "yuki", "text": "New feature flags are live for the mission queue redesign. If you want early access, DM me and I will add you to the beta group.", "ts": "1745937600.000006", "channel": "general"},
+  {"user": "james", "text": "Reminder: VPN certificate rotation is this weekend. Update your client by Friday EOD or you will lose access Monday morning.", "ts": "1745941200.000007", "channel": "general"},
+  {"user": "fiona", "text": "Posting the Q2 roadmap doc to the shared drive by EOD. Comments welcome until Wednesday.", "ts": "1745944800.000008", "channel": "general"}
+]

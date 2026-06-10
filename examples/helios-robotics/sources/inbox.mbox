@@ -1,0 +1,57 @@
+From alice.chen@helios.example Sun Apr 12 09:14:00 2026
+From: Alice Chen <alice.chen@helios.example>
+To: engineering@helios.example
+Subject: Auth Service Outage
+Message-ID: Auth Service Outage
+Date: 1744452840
+
+All -- auth service is down. Login attempts are failing 100%. I'm investigating now.
+Do NOT restart the service yet, I need to capture the deadlock trace first.
+
+ETA for fix: 30 minutes. Will update.
+
+Alice
+
+From bob.singh@helios.example Sun Apr 12 09:28:00 2026
+From: Bob Singh <bob.singh@helios.example>
+To: engineering@helios.example
+Subject: Re: Auth Service Outage
+In-Reply-To: Auth Service Outage
+Date: 1744453680
+
+Alice -- confirmed, I can reproduce the deadlock locally. It's the pg_stat_user_indexes
+rebuild from last night's maintenance. I've rolled back the index job. Clear to restart.
+
+@James can you monitor p99 latency on restart?
+
+Bob
+
+From leila.ahmadi@helios.example Mon Dec 15 02:33:00 2025
+From: Leila Ahmadi <leila.ahmadi@helios.example>
+To: engineering@helios.example,security@helios.example
+Subject: Security Key Rotation Required - URGENT
+Message-ID: Security Key Rotation Required - URGENT
+Date: 1734223980
+
+Team -- signing keys expired at 02:30 UTC. Robot auth is failing in us-east and eu-west.
+This should have been handled by the rotation job but it was skipped during the holiday freeze.
+
+I'm rotating keys manually now. Expect 5-10 minutes of continued failures.
+
+DO NOT discuss details of this incident in #general. Use this thread only.
+
+Leila
+
+From alice.chen@helios.example Mon Dec 15 02:41:00 2025
+From: Alice Chen <alice.chen@helios.example>
+To: engineering@helios.example,security@helios.example
+Subject: Re: Security Key Rotation Required - URGENT
+In-Reply-To: Security Key Rotation Required - URGENT
+Date: 1734224460
+
+Keys are live. Auth is recovering. us-east clear, eu-west give it 2 more minutes.
+
+I'll open the postmortem ticket now. Adding a hard dependency check to the holiday freeze
+runbook so this never gets skipped again.
+
+Alice

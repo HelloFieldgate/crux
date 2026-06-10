@@ -36,6 +36,7 @@ fn test_register_mcp_with_rate_limit_roundtrip() {
 
     let result = mesh::mesh_register_mcp(
         &dir, "echo-rl", "stdio", "true", "", "internal", "*", "10/30",
+        &crux_mesh::schema::OAuthConfig::default(),
     );
     assert!(result.is_ok(), "register failed: {:?}", result);
 
@@ -54,6 +55,7 @@ fn test_register_mcp_no_rate_limit() {
 
     mesh::mesh_register_mcp(
         &dir, "echo-norl", "stdio", "true", "", "internal", "*", "",
+        &crux_mesh::schema::OAuthConfig::default(),
     ).unwrap();
 
     let regs = mesh::load_mcp_registrations(&dir);
@@ -70,6 +72,7 @@ fn test_list_mcp_servers_shows_rate_limit() {
 
     mesh::mesh_register_mcp(
         &dir, "my-server", "stdio", "cat", "", "confidential", "read,write", "60/60",
+        &crux_mesh::schema::OAuthConfig::default(),
     ).unwrap();
 
     let table = mesh::mesh_list_mcp_servers(&dir).unwrap();
@@ -93,6 +96,7 @@ fn test_register_mcp_clearance_levels() {
     for (alias, level) in [("pub", "public"), ("int", "internal"), ("conf", "confidential"), ("res", "restricted")] {
         mesh::mesh_register_mcp(
             &dir, alias, "stdio", "true", "", level, "*", "",
+            &crux_mesh::schema::OAuthConfig::default(),
         ).unwrap();
     }
 
@@ -206,6 +210,7 @@ fn test_register_echo_server_and_list() {
 
     mesh::mesh_register_mcp(
         &dir, "echo", "stdio", &cmd, "", "internal", "*", "",
+        &crux_mesh::schema::OAuthConfig::default(),
     ).unwrap();
 
     let regs = mesh::load_mcp_registrations(&dir);
@@ -278,6 +283,7 @@ fn test_clearance_field_stored_and_loaded() {
     mesh::mesh_register_mcp(
         &dir, "restricted-tool", "stdio", "true", "",
         "restricted", "only_this_tool", "",
+        &crux_mesh::schema::OAuthConfig::default(),
     ).unwrap();
 
     let regs = mesh::load_mcp_registrations(&dir);
@@ -296,6 +302,7 @@ fn test_revoke_mcp_hides_from_list() {
 
     mesh::mesh_register_mcp(
         &dir, "to-revoke", "stdio", "true", "", "internal", "*", "",
+        &crux_mesh::schema::OAuthConfig::default(),
     ).unwrap();
 
     let before = mesh::load_mcp_registrations(&dir);
@@ -323,7 +330,7 @@ fn test_proposed_registration_excluded_from_active_list() {
     let config = crux_mesh::schema::PolicyConfig { require_approval: true, ..Default::default() };
     mesh::init_mesh_with_policy("strict", &dir, Some(config)).unwrap();
 
-    mesh::mesh_register_mcp(&dir, "pending-svc", "stdio", "/bin/cat", "", "internal", "*", "").unwrap();
+    mesh::mesh_register_mcp(&dir, "pending-svc", "stdio", "/bin/cat", "", "internal", "*", "", &crux_mesh::schema::OAuthConfig::default()).unwrap();
 
     // Should NOT appear in the active (router-visible) list
     let active = mesh::load_mcp_registrations(&dir);
@@ -351,7 +358,7 @@ fn test_refresh_capability_manifest_populates_cache() {
     write_echo_server(&script);
 
     let cmd = format!("python3 {}", script.display());
-    mesh::mesh_register_mcp(&dir, "echo-probe", "stdio", &cmd, "", "internal", "*", "").unwrap();
+    mesh::mesh_register_mcp(&dir, "echo-probe", "stdio", &cmd, "", "internal", "*", "", &crux_mesh::schema::OAuthConfig::default()).unwrap();
 
     let tools_json = mesh::refresh_capability_manifest(&dir, "echo-probe").unwrap();
     assert!(tools_json.contains("\"echo\""), "tools_json must contain 'echo' tool: {tools_json}");
