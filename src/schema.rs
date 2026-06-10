@@ -1274,6 +1274,57 @@ pub struct McpServerRegistration {
     pub fingerprint: String,
     /// Unix timestamp when this entry was first discovered (None for manual registrations).
     pub discovered_at: Option<u64>,
+    // --- OAuth 2.1 client configuration (Phase 1) ---
+    /// Authentication method: `"none"` (default) or `"oauth2"`.
+    pub auth: String,
+    /// OAuth 2.1 client ID (empty unless auth=oauth2).
+    pub oauth_client_id: String,
+    /// OAuth scopes, space-separated per RFC 6749 §3.3 (empty unless auth=oauth2).
+    pub oauth_scopes: String,
+    /// RFC 9728/8414 authorization server metadata URL.  Empty = use explicit endpoints.
+    pub oauth_discovery_url: String,
+    /// Explicit authorization endpoint (used when oauth_discovery_url is empty).
+    pub oauth_authorization_endpoint: String,
+    /// Token endpoint.
+    pub oauth_token_endpoint: String,
+    /// Dynamic Client Registration endpoint (RFC 7591).  Empty = no DCR.
+    pub oauth_registration_endpoint: String,
+}
+
+/// OAuth 2.1 client configuration passed to MCP registration entry points.
+///
+/// All fields default to empty / `"none"`.  Callers that do not need OAuth
+/// can pass `&OAuthConfig::default()`.
+#[derive(Debug, Clone)]
+pub struct OAuthConfig {
+    /// Authentication method: `"none"` (default) or `"oauth2"`.
+    pub auth: String,
+    /// OAuth 2.1 client ID.
+    pub client_id: String,
+    /// Space-separated scopes (RFC 6749 §3.3).
+    pub scopes: String,
+    /// RFC 9728/8414 authorization server metadata URL.
+    pub discovery_url: String,
+    /// Explicit authorization endpoint (used when discovery_url is empty).
+    pub authorization_endpoint: String,
+    /// Token endpoint.
+    pub token_endpoint: String,
+    /// Dynamic Client Registration endpoint (RFC 7591).
+    pub registration_endpoint: String,
+}
+
+impl Default for OAuthConfig {
+    fn default() -> Self {
+        Self {
+            auth: "none".to_string(),
+            client_id: String::new(),
+            scopes: String::new(),
+            discovery_url: String::new(),
+            authorization_endpoint: String::new(),
+            token_endpoint: String::new(),
+            registration_endpoint: String::new(),
+        }
+    }
 }
 
 /// Build an `mcp_server_registration` node ready for insertion into a policy crux.
@@ -1305,6 +1356,29 @@ pub fn build_mcp_server_registration(reg: &McpServerRegistration) -> CruxNode {
     }
     if let Some(ts) = reg.discovered_at {
         properties.push(format!("discovered_at={ts}"));
+    }
+    // OAuth fields — only emitted when auth=oauth2; auth=none/absent leaves the
+    // properties vec byte-identical to the pre-Phase-1 format.
+    if reg.auth == "oauth2" {
+        properties.push(format!("auth={}", reg.auth));
+        if !reg.oauth_client_id.is_empty() {
+            properties.push(format!("oauth_client_id={}", reg.oauth_client_id));
+        }
+        if !reg.oauth_scopes.is_empty() {
+            properties.push(format!("oauth_scopes={}", reg.oauth_scopes));
+        }
+        if !reg.oauth_discovery_url.is_empty() {
+            properties.push(format!("oauth_discovery_url={}", reg.oauth_discovery_url));
+        }
+        if !reg.oauth_authorization_endpoint.is_empty() {
+            properties.push(format!("oauth_authorization_endpoint={}", reg.oauth_authorization_endpoint));
+        }
+        if !reg.oauth_token_endpoint.is_empty() {
+            properties.push(format!("oauth_token_endpoint={}", reg.oauth_token_endpoint));
+        }
+        if !reg.oauth_registration_endpoint.is_empty() {
+            properties.push(format!("oauth_registration_endpoint={}", reg.oauth_registration_endpoint));
+        }
     }
     CruxNode {
         node_id: generate_node_id(&reg.alias, &sha256_hex(content.as_bytes())),
@@ -1370,6 +1444,17 @@ pub fn parse_mcp_server_registration(node: &CruxNode) -> Option<McpServerRegistr
         let v = get("discovered_at");
         if v.is_empty() { None } else { v.parse::<u64>().ok() }
     };
+    // OAuth fields — absent in pre-Phase-1 nodes; defaults preserve old behaviour.
+    let auth = {
+        let v = get("auth");
+        if v.is_empty() { "none".to_string() } else { v }
+    };
+    let oauth_client_id = get("oauth_client_id");
+    let oauth_scopes = get("oauth_scopes");
+    let oauth_discovery_url = get("oauth_discovery_url");
+    let oauth_authorization_endpoint = get("oauth_authorization_endpoint");
+    let oauth_token_endpoint = get("oauth_token_endpoint");
+    let oauth_registration_endpoint = get("oauth_registration_endpoint");
     Some(McpServerRegistration {
         alias,
         transport,
@@ -1385,6 +1470,13 @@ pub fn parse_mcp_server_registration(node: &CruxNode) -> Option<McpServerRegistr
         source,
         fingerprint,
         discovered_at,
+        auth,
+        oauth_client_id,
+        oauth_scopes,
+        oauth_discovery_url,
+        oauth_authorization_endpoint,
+        oauth_token_endpoint,
+        oauth_registration_endpoint,
     })
 }
 
@@ -1804,6 +1896,13 @@ mod tests {
             source: "manual".to_string(),
             fingerprint: String::new(),
             discovered_at: None,
+            auth: "none".to_string(),
+            oauth_client_id: String::new(),
+            oauth_scopes: String::new(),
+            oauth_discovery_url: String::new(),
+            oauth_authorization_endpoint: String::new(),
+            oauth_token_endpoint: String::new(),
+            oauth_registration_endpoint: String::new(),
         };
         let node = build_mcp_server_registration(&reg);
 
@@ -1871,6 +1970,13 @@ mod tests {
             source: "manifest:.crux-discovery/tool.json".to_string(),
             fingerprint: "sha256:abcdef1234".to_string(),
             discovered_at: Some(1700000000),
+            auth: "none".to_string(),
+            oauth_client_id: String::new(),
+            oauth_scopes: String::new(),
+            oauth_discovery_url: String::new(),
+            oauth_authorization_endpoint: String::new(),
+            oauth_token_endpoint: String::new(),
+            oauth_registration_endpoint: String::new(),
         };
         let node = build_mcp_server_registration(&reg);
         let parsed = parse_mcp_server_registration(&node).unwrap();
@@ -1909,5 +2015,101 @@ mod tests {
         assert_eq!(parsed.source, "manual");
         assert!(parsed.fingerprint.is_empty());
         assert_eq!(parsed.discovered_at, None);
+    }
+
+    #[test]
+    fn test_mcp_registration_auth_none_byte_identical() {
+        // A registration with auth="none" must produce ZERO new properties vs the
+        // pre-Phase-1 baseline — the oauth2 guard is the critical invariant.
+        let reg_none = McpServerRegistration {
+            alias: "plain-server".to_string(),
+            transport: McpTransport::Stdio,
+            command: "plain --mcp".to_string(),
+            url: String::new(),
+            required_clearance: McpClearance::Internal,
+            allowed_tools: "*".to_string(),
+            public_key: String::new(),
+            audit_required: true,
+            capability_manifest: String::new(),
+            rate_limit: None,
+            status: "approved".to_string(),
+            source: "manual".to_string(),
+            fingerprint: String::new(),
+            discovered_at: None,
+            auth: "none".to_string(),
+            oauth_client_id: String::new(),
+            oauth_scopes: String::new(),
+            oauth_discovery_url: String::new(),
+            oauth_authorization_endpoint: String::new(),
+            oauth_token_endpoint: String::new(),
+            oauth_registration_endpoint: String::new(),
+        };
+        let node = build_mcp_server_registration(&reg_none);
+        // No property may mention "oauth" or "auth="
+        for prop in &node.properties {
+            assert!(
+                !prop.starts_with("auth=") && !prop.starts_with("oauth_"),
+                "auth=none must not emit OAuth properties; got: {prop}"
+            );
+        }
+        // Parser must round-trip auth back to "none" (the default for absent prop)
+        let parsed = parse_mcp_server_registration(&node).unwrap();
+        assert_eq!(parsed.auth, "none");
+        assert!(parsed.oauth_client_id.is_empty());
+    }
+
+    #[test]
+    fn test_mcp_registration_oauth2_roundtrip() {
+        // A registration with auth=oauth2 must survive a full serialize→parse
+        // round-trip with all OAuth fields intact.
+        let reg = McpServerRegistration {
+            alias: "oauth-server".to_string(),
+            transport: McpTransport::Http,
+            command: String::new(),
+            url: "https://api.example.com/mcp".to_string(),
+            required_clearance: McpClearance::Confidential,
+            allowed_tools: "*".to_string(),
+            public_key: String::new(),
+            audit_required: true,
+            capability_manifest: String::new(),
+            rate_limit: None,
+            status: "approved".to_string(),
+            source: "manual".to_string(),
+            fingerprint: String::new(),
+            discovered_at: None,
+            auth: "oauth2".to_string(),
+            oauth_client_id: "client-abc123".to_string(),
+            oauth_scopes: "mcp:read mcp:write".to_string(),
+            oauth_discovery_url: "https://auth.example.com/.well-known/oauth-authorization-server".to_string(),
+            oauth_authorization_endpoint: String::new(),
+            oauth_token_endpoint: String::new(),
+            oauth_registration_endpoint: "https://auth.example.com/register".to_string(),
+        };
+        let node = build_mcp_server_registration(&reg);
+        // OAuth properties must be present
+        assert!(node.properties.iter().any(|p| p == "auth=oauth2"), "auth=oauth2 not serialized");
+        assert!(node.properties.iter().any(|p| p.starts_with("oauth_client_id=")));
+        assert!(node.properties.iter().any(|p| p.starts_with("oauth_scopes=")));
+        assert!(node.properties.iter().any(|p| p.starts_with("oauth_discovery_url=")));
+        // Empty endpoint fields must NOT be emitted
+        assert!(!node.properties.iter().any(|p| p.starts_with("oauth_authorization_endpoint=")));
+        assert!(!node.properties.iter().any(|p| p.starts_with("oauth_token_endpoint=")));
+
+        // Full crux serialize→parse round-trip
+        let mut db = create_policy_crux("oauth2-roundtrip");
+        db.nodes.push(node);
+        let json = serialize_crux_db(&db);
+        let parsed_db = parse_crux_db(&json).unwrap();
+        let parsed_node = parsed_db.nodes.iter()
+            .find(|n| n.kind == "mcp_server_registration").unwrap();
+        let parsed = parse_mcp_server_registration(parsed_node).unwrap();
+
+        assert_eq!(parsed.auth, "oauth2");
+        assert_eq!(parsed.oauth_client_id, "client-abc123");
+        assert_eq!(parsed.oauth_scopes, "mcp:read mcp:write");
+        assert_eq!(parsed.oauth_discovery_url, "https://auth.example.com/.well-known/oauth-authorization-server");
+        assert!(parsed.oauth_authorization_endpoint.is_empty());
+        assert!(parsed.oauth_token_endpoint.is_empty());
+        assert_eq!(parsed.oauth_registration_endpoint, "https://auth.example.com/register");
     }
 }

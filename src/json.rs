@@ -74,11 +74,30 @@ pub fn json_opt_u8(val: &Option<u8>) -> String {
 // Parsing
 // ===========================================================================
 
+/// Find the byte-index of `pattern` in `text` where the character immediately
+/// following `pattern` (after any whitespace) is `':'`, anchoring the match to
+/// a genuine JSON key position.  This prevents false-positives when a key name
+/// appears as a field *value* earlier in the same JSON blob
+/// (e.g. `{"action":"query","query":"foo"}`).
+fn find_json_key(text: &str, pattern: &str) -> Option<usize> {
+    let mut start = 0;
+    while let Some(rel) = text[start..].find(pattern) {
+        let idx = start + rel;
+        let after = &text[idx + pattern.len()..];
+        if after.trim_start().starts_with(':') {
+            return Some(idx);
+        }
+        // This occurrence was a value, not a key — skip past it and keep searching.
+        start = idx + 1;
+    }
+    None
+}
+
 /// Extract a string value for a given key from a JSON-like line.
 /// Looks for `"key": "value"` and returns the unescaped value.
 pub fn extract_string_value(line: &str, key: &str) -> Option<String> {
     let pattern = format!("\"{}\"", key);
-    let idx = line.find(&pattern)?;
+    let idx = find_json_key(line, &pattern)?;
     let after_key = &line[idx + pattern.len()..];
     // Skip `: ` or `:`
     let after_colon = after_key.trim_start().strip_prefix(':')?;
@@ -112,7 +131,7 @@ pub fn extract_string_value(line: &str, key: &str) -> Option<String> {
 /// Extract a numeric (u64) value for a given key from a JSON-like line.
 pub fn extract_u64_value(line: &str, key: &str) -> Option<u64> {
     let pattern = format!("\"{}\"", key);
-    let idx = line.find(&pattern)?;
+    let idx = find_json_key(line, &pattern)?;
     let after_key = &line[idx + pattern.len()..];
     let after_colon = after_key.trim_start().strip_prefix(':')?;
     let trimmed = after_colon.trim_start();
@@ -123,7 +142,7 @@ pub fn extract_u64_value(line: &str, key: &str) -> Option<u64> {
 /// Extract a boolean value for a given key from a JSON-like line.
 pub fn extract_bool_value(line: &str, key: &str) -> Option<bool> {
     let pattern = format!("\"{}\"", key);
-    let idx = line.find(&pattern)?;
+    let idx = find_json_key(line, &pattern)?;
     let after_key = &line[idx + pattern.len()..];
     let after_colon = after_key.trim_start().strip_prefix(':')?;
     let trimmed = after_colon.trim_start();
@@ -139,7 +158,7 @@ pub fn extract_bool_value(line: &str, key: &str) -> Option<bool> {
 /// Check if a value for a given key is `null`.
 pub fn is_null_value(line: &str, key: &str) -> bool {
     let pattern = format!("\"{}\"", key);
-    if let Some(idx) = line.find(&pattern) {
+    if let Some(idx) = find_json_key(line, &pattern) {
         let after_key = &line[idx + pattern.len()..];
         if let Some(after_colon) = after_key.trim_start().strip_prefix(':') {
             return after_colon.trim_start().starts_with("null");
@@ -151,7 +170,7 @@ pub fn is_null_value(line: &str, key: &str) -> bool {
 /// Extract a JSON array of strings from a line. Returns empty vec if not found.
 pub fn extract_string_array(text: &str, key: &str) -> Vec<String> {
     let pattern = format!("\"{}\"", key);
-    let idx = match text.find(&pattern) {
+    let idx = match find_json_key(text, &pattern) {
         Some(i) => i,
         None => return Vec::new(),
     };
@@ -409,6 +428,25 @@ mod tests {
     fn test_json_str_array_single() {
         let items = vec!["only".to_string()];
         assert_eq!(json_str_array(&items), "[\"only\"]");
+    }
+
+    #[test]
+    fn test_extract_string_value_key_value_collision() {
+        // Regression: when a key name appears as a *value* earlier in the JSON blob
+        // (e.g. `"action":"query"` followed by `"query":"…"`), find_json_key must
+        // skip the value occurrence and locate the real key.  This was the root cause
+        // of `mesh action=query` silently dropping the `query`/`tag` arguments.
+        let line = r#"{"action":"query","query":"oauth","tag":"security"}"#;
+        assert_eq!(extract_string_value(line, "action"), Some("query".to_string()));
+        assert_eq!(extract_string_value(line, "query"),  Some("oauth".to_string()));
+        assert_eq!(extract_string_value(line, "tag"),    Some("security".to_string()));
+    }
+
+    #[test]
+    fn test_extract_string_value_repeated_key_name_as_value() {
+        // The key "status" appears as a value for "kind", then as a real key.
+        let line = r#"{"kind":"status","status":"approved"}"#;
+        assert_eq!(extract_string_value(line, "status"), Some("approved".to_string()));
     }
 }
 
