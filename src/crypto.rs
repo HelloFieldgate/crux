@@ -672,7 +672,9 @@ fn probe_machine_id() -> String {
 fn install_salt() -> Vec<u8> {
     let salt_path = match crux_keys_dir() {
         Some(d) => d.join("install.salt"),
-        None => return secure_random_bytes(32),
+        // No home directory — fall back to a deterministic value so tokens
+        // remain readable across restarts on the same machine (e.g. containers).
+        None => return sha256(probe_machine_id().as_bytes()),
     };
     if let Ok(hex) = std::fs::read_to_string(&salt_path) {
         if let Ok(bytes) = hex_to_bytes(hex.trim()) {

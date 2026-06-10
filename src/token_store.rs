@@ -9,7 +9,7 @@
 
 use std::path::PathBuf;
 
-use crate::crypto::{aead_decrypt, aead_encrypt, bytes_to_hex, hex_to_bytes, machine_key};
+use crate::crypto::{aead_decrypt, aead_encrypt, bytes_to_hex, hex_to_bytes, machine_key, sha256};
 use crate::json::{extract_string_value, extract_u64_value, is_null_value, json_escape, json_opt_str, json_opt_u64};
 
 // ===========================================================================
@@ -75,11 +75,11 @@ fn token_store_dir() -> Option<PathBuf> {
 }
 
 fn token_path(alias: &str) -> Option<PathBuf> {
-    let safe: String = alias
-        .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '.' { c } else { '_' })
-        .collect();
-    token_store_dir().map(|d| d.join(format!("{safe}.tok")))
+    // Use sha256 of the alias as the filename to prevent collisions between aliases
+    // that differ only in characters that would otherwise map to the same safe string
+    // (e.g. "corp/api" and "corp@api" must not share a token file).
+    let hash = bytes_to_hex(&sha256(alias.as_bytes()));
+    token_store_dir().map(|d| d.join(format!("{hash}.tok")))
 }
 
 fn ensure_token_dir(dir: &std::path::Path) -> Result<(), String> {

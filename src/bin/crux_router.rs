@@ -96,15 +96,29 @@ impl McpChild {
 // ---------------------------------------------------------------------------
 
 /// Extract a string value for a given key from JSON text.
+///
+/// Skips occurrences of `"key"` that appear inside string values (where the
+/// next non-whitespace character after the key token is not `:`), preventing
+/// false positives when a field name appears as a value earlier in the document.
 fn extract_str<'a>(text: &'a str, key: &str) -> Option<&'a str> {
     let needle = format!("\"{}\"", key);
-    let idx = text.find(&needle)?;
-    let after = &text[idx + needle.len()..];
-    let colon = after.find(':')?;
-    let val = after[colon + 1..].trim_start();
-    let inner = val.strip_prefix('"')?;
-    let end = inner.find('"')?;
-    Some(&inner[..end])
+    let mut pos = 0;
+    while pos < text.len() {
+        let rel = text[pos..].find(&needle)?;
+        let abs = pos + rel;
+        let after = &text[abs + needle.len()..];
+        let colon_pos = after.find(':')?;
+        // Only treat as a key if only whitespace separates needle from ':'
+        if after[..colon_pos].trim().is_empty() {
+            let val = after[colon_pos + 1..].trim_start();
+            let inner = val.strip_prefix('"')?;
+            let end = inner.find('"')?;
+            return Some(&inner[..end]);
+        }
+        // This occurrence is a value, not a key — skip past it and retry.
+        pos = abs + needle.len();
+    }
+    None
 }
 
 /// Extract the raw JSON value of "id" (could be number or string).
@@ -353,7 +367,13 @@ fn merge_tools_lists_with_extra(lml_resp: &str, crux_resp: &str, extra_inners: &
     for extra in extra_inners {
         if !extra.is_empty() { parts.push(extra.as_str()); }
     }
-    let merged = format!("[{},{},{}]", parts.join(","), PROJECT_TOOL_DEF, OAUTH_AUTHORIZE_TOOL_DEF);
+    // Always include the two router-local tool definitions.  Push them into
+    // `parts` rather than appending them in the format string so that
+    // parts.join(",") never produces a leading comma when the other sources
+    // return empty arrays.
+    parts.push(PROJECT_TOOL_DEF);
+    parts.push(OAUTH_AUTHORIZE_TOOL_DEF);
+    let merged = format!("[{}]", parts.join(","));
     format!("{{\"tools\":{}}}", merged)
 }
 
@@ -983,6 +1003,8 @@ struct DynamicRegistration {
     oauth_discovery_url: String,
     oauth_authorization_endpoint: String,
     oauth_token_endpoint: String,
+    #[allow(dead_code)] // used by DCR re-registration in the 401-retry path
+    oauth_registration_endpoint: String,
     // Phase 5: in-memory access-token cache (avoids disk read on every forward).
     cached_access_token: Option<String>,
     cached_expires_at: Option<u64>,
@@ -1311,6 +1333,7 @@ fn build_dynamic_registry(mesh_dir: &std::path::Path) -> (Vec<DynamicRegistratio
             oauth_discovery_url: r.oauth_discovery_url,
             oauth_authorization_endpoint: r.oauth_authorization_endpoint,
             oauth_token_endpoint: r.oauth_token_endpoint,
+            oauth_registration_endpoint: r.oauth_registration_endpoint,
             cached_access_token: None,
             cached_expires_at: None,
         });
@@ -1727,11 +1750,14 @@ fn oauth_dcr(alias: &str, registration_endpoint: &str, scopes: &str) -> Result<S
     } else {
         format!(",\"scope\":{}", json_quote(scopes))
     };
-    // RFC 7591 §2 minimal registration request
+    // RFC 7591 §2 minimal registration request.
+    // RFC 8252 §8.4: native/CLI clients are public; token_endpoint_auth_method
+    // must be "none" (not "client_secret_basic") so strict AS implementations
+    // don't require HTTP Basic credentials we never send.
     let body = format!(
         "{{\"client_name\":{name},\"grant_types\":[\"authorization_code\"],\
          \"response_types\":[\"code\"],\
-         \"token_endpoint_auth_method\":\"client_secret_basic\"{scope}}}",
+         \"token_endpoint_auth_method\":\"none\"{scope}}}",
         name  = json_quote(alias),
         scope = scope_clause,
     );
@@ -2042,7 +2068,18 @@ fn oauth_authorize(
     if let (Some(code), Some(_given_state), Some(verifier)) =
         (preauth_code, preauth_state, preauth_verifier)
     {
-        let redirect_uri = preauth_redirect_uri.unwrap_or("");
+        // The state parameter is accepted for API symmetry but cannot be
+        // validated against a stored expected value — the original interactive
+        // session that generated it has ended (timed out or was on another
+        // host).  PKCE (code_verifier ↔ code_challenge binding) provides the
+        // equivalent protection: the code is useless without the verifier.
+        let redirect_uri = match preauth_redirect_uri {
+            Some(r) if !r.is_empty() => r,
+            _ => return Err(format!(
+                "oauth_authorize: 'redirect_uri' is required on the paste fallback path \
+                 and must match the URI used in the original authorization request"
+            )),
+        };
         let tokens = oauth_token_exchange(
             &meta.token_endpoint, &client_id, code, verifier, redirect_uri, &reg.oauth_scopes,
         )?;
@@ -2309,8 +2346,19 @@ fn forward_http_oauth(
                         &[("Authorization", &new_bearer)],
                         Some(body),
                     ) {
-                        Ok(retry) => (
+                        Ok(retry) if retry.status == 200 => (
                             sanitize_response(&retry.body, caller, policy_json),
+                            new_cache,
+                        ),
+                        Ok(retry) => (
+                            json_rpc_error(
+                                id,
+                                -32603,
+                                &format!(
+                                    "OAuth proxy error: server returned HTTP {} after token refresh",
+                                    retry.status
+                                ),
+                            ),
                             new_cache,
                         ),
                         Err(e) => (

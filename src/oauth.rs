@@ -396,10 +396,14 @@ pub fn oauth_discover(reg: &OAuthReg) -> Result<AuthServerMeta, String> {
 pub fn oauth_dcr(alias: &str, registration_endpoint: &str, scopes: &str) -> Result<String, String> {
     let scope_clause = if scopes.is_empty() { String::new() }
         else { format!(",\"scope\":{}", json_escape(scopes)) };
+    // RFC 8252 §8.4: native/CLI OAuth clients are public clients and MUST use
+    // token_endpoint_auth_method=none.  client_secret_basic would tell the AS
+    // we are a confidential client, causing it to require HTTP Basic credentials
+    // that we never send — breaking the token exchange on strict servers.
     let body = format!(
         "{{\"client_name\":{},\"grant_types\":[\"authorization_code\"],\
          \"response_types\":[\"code\"],\
-         \"token_endpoint_auth_method\":\"client_secret_basic\"{}}}",
+         \"token_endpoint_auth_method\":\"none\"{}}}",
         json_escape(alias), scope_clause,
     );
     let resp = http_request("POST", registration_endpoint, &[], Some(&body))?;

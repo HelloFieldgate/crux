@@ -35,6 +35,42 @@ A **crux** is a single portable `.crux.json` file — diffable, git-friendly, no
 
 ---
 
+## OAuth 2.1 Client Support
+
+The router can act as an **OAuth 2.1 client** on behalf of registered MCP servers — handling the full authorization-code + PKCE flow so neither the agent nor the user ever touches raw tokens.
+
+### How it works
+
+1. **Register** an OAuth-protected MCP server with `mesh register_mcp` (or Helm > MCP Servers), supplying the authorization server's discovery URL or explicit endpoints:
+   ```bash
+   crux mesh register_mcp \
+     --alias github \
+     --transport http \
+     --url https://api.github.com \
+     --auth oauth2 \
+     --oauth_discovery_url https://github.com/.well-known/oauth-authorization-server \
+     --oauth_scopes "repo read:user"
+   ```
+
+2. **Authorize** — the first time the agent calls a tool on that server, the router emits an authorization URL. Open it in your browser; consent; the router captures the callback automatically via a local loopback listener. If the callback can't reach `localhost` (e.g. remote SSH), paste the full redirect URL and re-call `oauth_authorize` with the `code`, `state`, and `code_verifier` parameters.
+
+3. **Automatic token management** — tokens are encrypted with ChaCha20 + HMAC-SHA256 using a machine-derived key and stored in `~/.crux-tokens/`. The router attaches `Authorization: Bearer <token>` to every forwarded request, pre-flight refreshes tokens that are within 60 seconds of expiry, and retries once on HTTP 401.
+
+4. **Helm integration** — the Helm UI shows an OAuth badge per server with **Authorize** / **Revoke** buttons. The `/api/mcp/oauth/start` and `/oauth/callback` endpoints handle the browser-based flow without requiring terminal access.
+
+### Dynamic Client Registration
+
+If you don't have a `client_id`, the router can self-register via [RFC 7591](https://datatracker.ietf.org/doc/html/rfc7591) Dynamic Client Registration — just supply `oauth_registration_endpoint` when registering the server. The assigned `client_id` is stored in the policy crux; any `client_secret` is encrypted in the token store and never written to the crux.
+
+### Security properties
+
+- Tokens never enter the policy crux — encrypted store only.
+- PKCE (RFC 7636) is always used: `code_verifier = base64url(random(32))`, `code_challenge = base64url(SHA-256(verifier))`.
+- Endpoint discovery follows RFC 9728 / RFC 8414 with an explicit-endpoint fast path.
+- The `oauth_authorize` tool is a **router-local route** — it never leaves the router process.
+
+---
+
 ## Why Pure Rust, Zero Dependencies
 
 Crux has no external crate dependencies — stdlib only. JSON is hand-rolled. The W-OTS crypto implementation is hand-rolled. The `[dependencies]` section in `Cargo.toml` is empty.
@@ -212,9 +248,10 @@ TODO: Add screenshots before public announcement.
 | Tool | Key actions |
 |------|-------------|
 | `crux` | `create` `load` `query` `add_node` `add_edge` `update_node` `generate` `scan` `resolve` `extract` `verify` … |
-| `mesh` | `init` `join` `leave` `status` `query` `build` `register_mcp` `list_mcp_servers` `revoke_mcp` … |
+| `mesh` | `init` `join` `leave` `status` `query` `build` `register_mcp` `list_mcp_servers` `revoke_mcp` `auth_status` `trigger_auth` `oauth_revoke` … |
 | `pkg` | `search` `publish` `install` `audit` `update` |
 | `project` | `init` — bootstrap a three-crux starter mesh in one call |
+| `oauth_authorize` | Run the full PKCE authorization-code flow for an OAuth-protected MCP server (interactive or paste-fallback) |
 
 Legacy single-purpose names (`crux_create`, `mesh_init`, `crux_add_node`, …) are accepted as aliases. Full action reference: [CRUX_AGENT_SPEC.md](CRUX_AGENT_SPEC.md).
 

@@ -1110,18 +1110,25 @@ pub fn handle_oauth_callback(
         Some(s) => s.clone(),
         None => return html_error_page("Authorization failed: no state in callback."),
     };
-    let pending_state = match pending.lock().ok().and_then(|mut m| m.remove(&alias)) {
+    // Clone the pending state without removing it yet — the token exchange
+    // may fail transiently, and we want the user to be able to retry the
+    // callback without restarting the full authorization flow.
+    let pending_state = match pending.lock().ok().and_then(|m| m.get(&alias).cloned()) {
         Some(p) => p,
         None => return html_error_page(&format!(
             "Authorization failed: no pending flow for alias '{}'. Did it time out?", alias
         )),
     };
     match crate::oauth::helm_oauth_complete(&pending_state, &code, &state, Some(mesh_root)) {
-        Ok(_) => Response {
-            status: 200,
-            content_type: "text/html",
-            body: HTML_OAUTH_SUCCESS.as_bytes().to_vec(),
-        },
+        Ok(_) => {
+            // Exchange succeeded — now remove the pending state.
+            let _ = pending.lock().ok().map(|mut m| m.remove(&alias));
+            Response {
+                status: 200,
+                content_type: "text/html",
+                body: HTML_OAUTH_SUCCESS.as_bytes().to_vec(),
+            }
+        }
         Err(e) => html_error_page(&format!("Authorization failed: {}", e)),
     }
 }
