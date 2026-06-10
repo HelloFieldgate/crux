@@ -809,6 +809,7 @@ pub fn mesh_register_mcp(
     required_clearance: &str,
     allowed_tools: &str,
     rate_limit: &str,
+    oauth: &crate::schema::OAuthConfig,
 ) -> Result<String, String> {
     use crate::schema::{
         McpClearance, McpServerRegistration, McpTransport,
@@ -865,6 +866,13 @@ pub fn mesh_register_mcp(
         source: "manual".to_string(),
         fingerprint: String::new(),
         discovered_at: None,
+        auth: oauth.auth.clone(),
+        oauth_client_id: oauth.client_id.clone(),
+        oauth_scopes: oauth.scopes.clone(),
+        oauth_discovery_url: oauth.discovery_url.clone(),
+        oauth_authorization_endpoint: oauth.authorization_endpoint.clone(),
+        oauth_token_endpoint: oauth.token_endpoint.clone(),
+        oauth_registration_endpoint: oauth.registration_endpoint.clone(),
     };
 
     let node = build_mcp_server_registration(&reg);
@@ -905,6 +913,7 @@ pub fn mesh_register_mcp_with_source(
     allowed_tools: &str,
     rate_limit: &str,
     source: &str,
+    oauth: &crate::schema::OAuthConfig,
 ) -> Result<String, String> {
     use crate::schema::{
         McpClearance, McpServerRegistration, McpTransport,
@@ -962,6 +971,13 @@ pub fn mesh_register_mcp_with_source(
         source: source.to_string(),
         fingerprint,
         discovered_at: Some(now),
+        auth: oauth.auth.clone(),
+        oauth_client_id: oauth.client_id.clone(),
+        oauth_scopes: oauth.scopes.clone(),
+        oauth_discovery_url: oauth.discovery_url.clone(),
+        oauth_authorization_endpoint: oauth.authorization_endpoint.clone(),
+        oauth_token_endpoint: oauth.token_endpoint.clone(),
+        oauth_registration_endpoint: oauth.registration_endpoint.clone(),
     };
 
     let node = build_mcp_server_registration(&reg);
@@ -1116,6 +1132,13 @@ pub fn mesh_discover(mesh_dir: &Path) -> Result<DiscoveryReport, String> {
                         source,
                         fingerprint,
                         discovered_at: Some(ts),
+                        auth: "none".to_string(),
+                        oauth_client_id: String::new(),
+                        oauth_scopes: String::new(),
+                        oauth_discovery_url: String::new(),
+                        oauth_authorization_endpoint: String::new(),
+                        oauth_token_endpoint: String::new(),
+                        oauth_registration_endpoint: String::new(),
                     };
                     policy_db.nodes.push(build_mcp_server_registration(&reg));
                     report.updated.push(alias);
@@ -1145,6 +1168,13 @@ pub fn mesh_discover(mesh_dir: &Path) -> Result<DiscoveryReport, String> {
                     source,
                     fingerprint,
                     discovered_at: Some(ts),
+                    auth: "none".to_string(),
+                    oauth_client_id: String::new(),
+                    oauth_scopes: String::new(),
+                    oauth_discovery_url: String::new(),
+                    oauth_authorization_endpoint: String::new(),
+                    oauth_token_endpoint: String::new(),
+                    oauth_registration_endpoint: String::new(),
                 };
                 policy_db.nodes.push(build_mcp_server_registration(&reg));
                 report.added.push(alias);
@@ -3693,6 +3723,13 @@ mod tests {
             source: "manual".to_string(),
             fingerprint: String::new(),
             discovered_at: None,
+            auth: "none".to_string(),
+            oauth_client_id: String::new(),
+            oauth_scopes: String::new(),
+            oauth_discovery_url: String::new(),
+            oauth_authorization_endpoint: String::new(),
+            oauth_token_endpoint: String::new(),
+            oauth_registration_endpoint: String::new(),
         };
         db.nodes.push(build_mcp_server_registration(&reg));
         crate::schema::save_crux_db(&db, &policy_dir).unwrap();
@@ -3888,7 +3925,7 @@ mod tests {
         let config = crate::schema::PolicyConfig { require_approval: true, ..Default::default() };
         init_mesh_with_policy("strict-mesh", &dir, Some(config)).unwrap();
 
-        let msg = mesh_register_mcp(&dir, "my-svc", "stdio", "/bin/my-svc", "", "internal", "*", "").unwrap();
+        let msg = mesh_register_mcp(&dir, "my-svc", "stdio", "/bin/my-svc", "", "internal", "*", "", &crate::schema::OAuthConfig::default()).unwrap();
         assert!(msg.contains("my-svc"), "got: {msg}");
 
         // Should be proposed, not in active list
@@ -3951,7 +3988,7 @@ mod tests {
     fn test_register_mcp_self_sig_non_empty_after_init() {
         let dir = temp_dir("self_sig_non_empty");
         init_mesh("test-self-sig", &dir).unwrap();
-        let result = mesh_register_mcp(&dir, "my-mcp", "stdio", "my-tool --mcp", "", "internal", "*", "").unwrap();
+        let result = mesh_register_mcp(&dir, "my-mcp", "stdio", "my-tool --mcp", "", "internal", "*", "", &crate::schema::OAuthConfig::default()).unwrap();
         assert!(result.contains("my-mcp"), "got: {result}");
 
         let manifest = load_mesh(&dir).unwrap();
@@ -4087,7 +4124,7 @@ mod tests {
     fn test_register_mcp_self_sig_verifies() {
         let dir = temp_dir("self_sig_verify");
         init_mesh("test-verify-sig", &dir).unwrap();
-        mesh_register_mcp(&dir, "verify-mcp", "http", "", "http://localhost:9000", "restricted", "*", "").unwrap();
+        mesh_register_mcp(&dir, "verify-mcp", "http", "", "http://localhost:9000", "restricted", "*", "", &crate::schema::OAuthConfig::default()).unwrap();
 
         let manifest = load_mesh(&dir).unwrap();
         let policy_db = load_policy_crux(&manifest, &dir).unwrap();

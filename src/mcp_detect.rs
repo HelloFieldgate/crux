@@ -588,7 +588,7 @@ mod tests {
 
         let result = crate::mesh::mesh_register_mcp_with_source(
             &dir, "ext-server", "stdio", "/usr/bin/python3 server.py", "", "internal", "*", "",
-            "detect:claude-desktop",
+            "detect:claude-desktop", &crate::schema::OAuthConfig::default(),
         );
         assert!(result.is_ok(), "route_external registration failed: {:?}", result);
 
