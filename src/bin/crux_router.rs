@@ -313,16 +313,94 @@ fn route_uri(uri: &str) -> Option<Route> {
 /// Merge two initialize responses into one combined response.
 /// Takes the protocol version from the first, combines capabilities and
 /// server info.
-fn merge_initialize_responses(lml_resp: &str, crux_resp: &str) -> String {
-    // We just need to build a combined response. Extract the "result" objects
-    // and build a new one.
+fn merge_initialize_responses(lml_resp: &str, crux_resp: &str, project_summary: &str) -> String {
     let _lml_result = extract_result(lml_resp);
     let _crux_result = extract_result(crux_resp);
 
-    // Build a combined response with merged capabilities
-    let result = r#"{"protocolVersion":"2024-11-05","capabilities":{"tools":{},"resources":{}},"serverInfo":{"name":"crux-router","version":"0.1.0"},"instructions":"Unified MCP router providing both LML compiler tools (lml_*) and Crux Mesh tools (crux_*/mesh_*). Use lml_check/lml_run for LML compilation, crux_load/mesh_query for mesh operations."}"#;
+    let base = "Unified MCP router providing both LML compiler tools (lml_*) and Crux Mesh tools (crux_*/mesh_*). Use lml_check/lml_run for LML compilation, crux_load/mesh_query for mesh operations.";
+    let instructions = if project_summary.is_empty() {
+        base.to_string()
+    } else {
+        format!("{}\n\n{}", base, project_summary)
+    };
 
-    result.to_string()
+    format!(
+        r#"{{"protocolVersion":"2024-11-05","capabilities":{{"tools":{{}},"resources":{{}}}},"serverInfo":{{"name":"crux-router","version":"0.1.0"}},"instructions":{}}}"#,
+        json_escape(&instructions)
+    )
+}
+
+/// Load .crux.json from mesh_dir and return a compact summary for MCP initialize instructions.
+fn build_project_crux_summary(mesh_dir: Option<&std::path::Path>) -> String {
+    let dir = match mesh_dir {
+        Some(d) => d,
+        None => return String::new(),
+    };
+    let content = match std::fs::read_to_string(dir.join(".crux.json")) {
+        Ok(c) => c,
+        Err(_) => return String::new(),
+    };
+
+    let node_count = content.matches("\"node_id\"").count();
+    let edge_count = content.matches("\"edge_id\"").count();
+
+    let lines: Vec<&str> = content.lines().collect();
+    let n = lines.len();
+
+    let mut sessions: Vec<String> = Vec::new();
+    let mut open_bugs: Vec<String> = Vec::new();
+
+    for i in 0..n {
+        let trimmed = lines[i].trim().trim_end_matches(',');
+        let kind = if trimmed == "\"kind\": \"session\"" {
+            "session"
+        } else if trimmed == "\"kind\": \"bug\"" {
+            "bug"
+        } else {
+            continue;
+        };
+
+        // Look back up to 5 lines for "name": "..."
+        let name = (1..=5usize)
+            .filter(|&back| i >= back)
+            .find_map(|back| crux_field_value(lines[i - back].trim(), "name"));
+
+        if let Some(name) = name {
+            if kind == "session" {
+                sessions.push(name);
+            } else {
+                // Bug is resolved if tags contain "resolved" or planning.status is "resolved"
+                let is_resolved = lines[i..].iter().take(50).any(|l| {
+                    let t = l.trim().trim_end_matches(',');
+                    t == "\"resolved\"" || t == "\"status\": \"resolved\""
+                });
+                if !is_resolved {
+                    open_bugs.push(name);
+                }
+            }
+        }
+    }
+
+    let recent: Vec<String> = sessions.into_iter().rev().take(3).collect();
+
+    let mut parts = vec![format!("Project crux: {} nodes, {} edges.", node_count, edge_count)];
+    if !recent.is_empty() {
+        parts.push(format!("Recent sessions (newest first): {}.", recent.join(", ")));
+    }
+    if !open_bugs.is_empty() {
+        parts.push(format!("Open bugs: {}.", open_bugs.join(", ")));
+    }
+
+    parts.join(" ")
+}
+
+/// Extract the string value of `key` from a single trimmed JSON field line, e.g. `"name": "foo",`.
+fn crux_field_value(line: &str, key: &str) -> Option<String> {
+    let needle = format!("\"{}\":", key);
+    let idx = line.find(&needle)? + needle.len();
+    let rest = line[idx..].trim_start().strip_prefix('"')?;
+    let end = rest.find('"')?;
+    Some(rest[..end].to_string())
 }
 
 /// Extract the "result" object from a JSON-RPC response (raw JSON).
@@ -2559,6 +2637,8 @@ fn run_router(policy_router_mode: bool) -> Result<(), String> {
         _ => (Vec::new(), String::new()),
     };
 
+    let project_summary = build_project_crux_summary(mesh_dir.as_deref());
+
     let lml_bin = find_lml_binary();
     let crux_bin = find_crux_binary();
 
@@ -2591,7 +2671,7 @@ fn run_router(policy_router_mode: bool) -> Result<(), String> {
                 crux.send(trimmed)?;
                 let lml_resp = lml.recv()?;
                 let crux_resp = crux.recv()?;
-                let merged = merge_initialize_responses(&lml_resp, &crux_resp);
+                let merged = merge_initialize_responses(&lml_resp, &crux_resp, &project_summary);
                 format!(
                     "{{\"jsonrpc\":\"2.0\",\"id\":{},\"result\":{}}}",
                     id, merged
@@ -3168,7 +3248,7 @@ mod tests {
     fn test_merge_initialize() {
         let lml = r#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","serverInfo":{"name":"lml"}}}"#;
         let crux = r#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","serverInfo":{"name":"crux-mesh"}}}"#;
-        let merged = merge_initialize_responses(lml, crux);
+        let merged = merge_initialize_responses(lml, crux, "");
         assert!(merged.contains("crux-router"), "merged: {}", merged);
         assert!(merged.contains("protocolVersion"), "merged: {}", merged);
     }
