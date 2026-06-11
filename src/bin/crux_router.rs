@@ -477,363 +477,171 @@ fn merge_resources_lists(lml_resp: &str, crux_resp: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// LML knowledge summaries — embedded in code crux nodes at project init
+// LML knowledge — fetched at runtime from the lml binary via --emit-knowledge
 // ---------------------------------------------------------------------------
 
-const LML_TYPES_SUMMARY: &str = r#"LML Type System — 20 built-in types
-
-COPY TYPES (no DUP/DROP needed): Int, Bool, Float, FnRef
-LINEAR TYPES (must consume exactly once): Str, Vec, Map, Set, Bytes, FileHandle, TcpHandle, Chan, Closure, Tensor, variant values
-
-LITERAL SYNTAX:
-  Int:   @x = CONST 42   (negative: CONST -5)
-  Bool:  @b = CONST true / false
-  Float: @f = CONST 3.14  (MUST have decimal — CONST 2.0 not CONST 2)
-  Str:   @s = CONST "hello"
-  Unit:  @u = CONST ()
-
-TYPE CONVERSIONS:
-  TO_FLOAT @i   — Int to Float
-  DISPLAY @x    — Int/Bool/Float to Str (linear, must consume result)
-  STR_TO_INT @s — Str to Int (consumes Str)
-
-VARIANTS (sum types):
-  PACK Some [@val]         — create variant (mixed-case tag name)
-  UNPACK @v Some [value]   — destructure (fields without @)
-  TAG @v                   — get tag as Str
-
-FUNCTION SIGNATURES:
-  FN @name [p1 p2] -> ReturnType { ... }
-  PROCESS @name [p1] { ... }   — no RETURN, use HALT
-
-NUMERIC: Int (i64), Float (f64)
-BITWISE OPS: BAND/BOR/BXOR/BNOT/SHL/SHR  (Int only; AND/OR/XOR are Bool)
-COMPARISON: EQ NE LT LE GT GE  — all return Bool"#;
-
-const LML_LINEARITY_SUMMARY: &str = r#"LML Linearity Rules
-
-RULE 1 — Every linear value must be consumed exactly once on EVERY execution path.
-Copy types (Int, Bool, Float, FnRef): no constraint.
-Linear types (Str, Vec, Map, Set, Bytes, handles, Closure, Tensor, variants): consume exactly once.
-
-RULE 2 — DUP to copy a linear value:
-  @s2 = DUP @s    -- @s consumed, @s2 is fresh copy
-  ERROR: DUP on Copy types (Int, Bool, Float, FnRef) is illegal.
-
-RULE 3 — DROP to discard:
-  DROP @v         -- consumes @v without using it
-  NOTE: DROP on Copy types is illegal.
-
-RULE 4 — VEC_PEEK copy machine (non-consuming indexed read):
-  @r = VEC_PEEK @vec @idx
-  SWITCH (TAG @r)
-    Found    [@vec2 @elem]  B_found   -- thread @vec2 back
-    NotFound [@vec2]        B_miss
-
-RULE 5 — MAP_GET return-back:
-  @r = MAP_GET @map @key
-  SWITCH (TAG @r)
-    Found    [@map2 @val]  B_hit    -- map and value both returned
-    NotFound [@map2]       B_miss   -- map returned on miss too
-
-RULE 6 — CATCH bindings are linear:
-  CATCH @result
-    Ok  [@data]  { /* consume @data */ }
-    Err [@e]     { DROP @e  /* or use @e */ }
-
-RULE 7 — EFFECT consumes all args. Rebind constants if needed:
-  @path2 = CONST "file.txt"  -- fresh Str
-  EFFECT IO.WRITE_FILE @path2 @data
-
-RULE 8 — Every branch must consume all linear vars live at that point.
-Add DROP in branches that don't naturally use the value."#;
-
-const LML_CONTROL_FLOW_SUMMARY: &str = r#"LML Control Flow
-
-BRANCH — conditional jump (Bool required, not Int):
-  BRANCH (GT @a @b) B_then B_else   -- inline predicate
-  BRANCH @cond B_then B_else         -- variable
-
-SWITCH + TAG — variant dispatch:
-  SWITCH (TAG @v)
-    Some [value] B_some
-    None []      B_none
-  Then in B_some: UNPACK @v Some [value]  -- destructure
-
-JUMP — unconditional:
-  JUMP B_target
-
-PHI — SSA merge (must list ALL predecessors):
-  @x = PHI [B_entry @a] [B_loop @b]
-
-CATCH — Result handling:
-  CATCH @r
-    Ok  [@data] B_ok
-    Err [@e]    B_err
-  Note: for IO.READ/READLINE/WRITE use SWITCH+UNPACK (handle threaded through both arms)
-
-RETURN / HALT:
-  RETURN @result   -- in FN only
-  HALT             -- in PROCESS only
-
-LOOP PATTERN:
-  B_entry:
-    @x = CONST 0
-    JUMP B_loop
-  B_loop:
-    @x2 = PHI [B_entry @x] [B_cont @x3]
-    @x3 = ADD @x2 (CONST 1)
-    BRANCH (LT @x3 @limit) B_cont B_done
-  B_cont:
-    JUMP B_loop
-  B_done:
-    RETURN @x3
-
-KEY RULES:
-- Every block needs exactly one terminator as its last statement.
-- PHI must list every predecessor block — no more, no fewer.
-- ALL-CAPS strings (e.g. "ADD") from ast_bridge are Str not Variant — use STR_CHAR_AT dispatch, not SWITCH(TAG).
-- BRANCH condition must be Bool (EQ/LT/GT return Bool; CONST 0 is Int not Bool)."#;
-
-const LML_OPERATIONS_SUMMARY: &str = r#"LML Operations Quick Reference
-
-STRING (consume Str unless noted):
-  STR_CONCAT @a @b → Str       DISPLAY @x → Str (Int/Bool/Float)
-  STR_LEN @s → Int             STR_CHAR_AT @s @i → Int (consumes @s)
-  STR_BYTE_LEN @s → Int        STR_SLICE @s @start @end → Str
-  STR_TO_INT @s → Int          STR_EQ @a @b → Bool
-  STR_SPLIT @s @sep → Vec
-
-VEC (consume Vec unless returning it):
-  VEC_NEW → Vec                VEC_PUSH @v @x → Vec
-  VEC_POP @v → Pair[@v2 @x]   VEC_LEN @v → Pair[@v2 Int]
-  VEC_PEEK @v @i → Pair        VEC_CONCAT @a @b → Vec
-  VEC_MAP @v @fn → Vec         VEC_FILTER @v @pred → Vec
-  VEC_FOLD @v @acc @fn → Pair[@v2 @acc2]
-
-MAP (consume Map unless returning it):
-  MAP_NEW → Map                MAP_PUT @m @k @v → Map
-  MAP_GET @m @k → Variant      MAP_REMOVE @m @k → Map
-  MAP_KEYS @m → Pair[@m2 Vec]  MAP_LEN @m → Pair[@m2 Int]
-
-SET:
-  SET_NEW → Set                SET_ADD @s @x → Set
-  SET_CONTAINS @s @x → Pair    SET_REMOVE @s @x → Set
-
-MATH (Int+Int→Int, Float+Float→Float; use TO_FLOAT to convert):
-  ADD SUB MUL DIV MOD  ABS NEG TO_FLOAT  MIN MAX
-
-EFFECT OPS:
-  EFFECT IO.READ_FILE @path → Result[Str]
-  EFFECT IO.WRITE_FILE @path @data → Result[Unit]
-  EFFECT IO.OPEN @path @mode → Result[FileHandle]
-  EFFECT IO.READ_LINE @fh → Result[Pair[FileHandle Str]]
-  EFFECT IO.WRITE @fh @data → Result[FileHandle]
-  EFFECT IO.CLOSE @fh → Unit
-  EFFECT STDIO.READ_LINE → Result[Str]
-  EFFECT STDIO.WRITE @s → Unit
-  EFFECT TCP.CONNECT @host @port → Result[TcpHandle]
-  EFFECT TCP.READ @handle → Result[Pair[TcpHandle Str]]
-  EFFECT TCP.WRITE @handle @data → Result[TcpHandle]
-  EFFECT TCP.CLOSE @handle → Unit
-  EFFECT OS.ENV @name → Str
-  EFFECT OS.EXIT @code → Never"#;
-
-const LML_PATTERNS_SUMMARY: &str = r#"LML Patterns Catalog (15 patterns)
-
-1. COPY MACHINE — Vec non-consuming read:
-   @r = VEC_PEEK @v @i
-   SWITCH (TAG @r) Found [@v2 @elem] { use @elem } NotFound [@v2] {}
-
-2. RETURN-BACK — MAP_GET with container recovery:
-   @r = MAP_GET @m @k
-   SWITCH (TAG @r) Found [@m2 @val] { use @val } NotFound [@m2] {}
-
-3. ACCUMULATOR LOOP — iterate with counter + accumulator PHIs:
-   B_loop: @i = PHI [B_entry @zero] [B_cont @i_next]
-           @acc = PHI [B_entry @init] [B_cont @acc_next]
-           @r = VEC_PEEK @v @i  ...
-
-4. HANDLE THREADING — IO in loops (handle threaded through arms):
-   CATCH (EFFECT IO.OPEN @path) Ok [@fh] { loop with @fh } Err [@e] { DROP @e }
-   Use SWITCH not CATCH for IO.READ/READLINE (handle in both arms)
-
-5. SWITCH-UNPACK — variant dispatch with destructure:
-   SWITCH (TAG @opt) Some [value] B_some  None [] B_none
-   B_some: UNPACK @opt Some [value]  -- no @ on field name
-
-6. TAIL RECURSION:
-   @result = CALL @self @n @acc
-   RETURN @result
-
-7. ERROR PROPAGATION (short-circuit):
-   CATCH @r Ok [@v] { use @v } Err [@e] { RETURN @e }
-
-8. CLOSURE CAPTURE:
-   @fn = CLOSURE [CAPTURE @x @y] [@param] { body using @x @y @param }
-
-9. CHANNEL PIPELINE:
-   @ch = EFFECT CHAN.NEW
-   SPAWN @producer [@ch]
-   @val = EFFECT CHAN.RECV @ch
-
-10. VEC COLLECT:
-    B_loop: @v2 = VEC_PUSH @v1 @item
-            BRANCH (cond) B_loop B_done
-
-11. DUP FOR MULTIPLE USE:
-    @s2 = DUP @s
-    @len = STR_LEN @s       -- @s consumed
-    @out = STR_CONCAT @s2 (CONST " ")  -- @s2 consumed
-
-12. CONDITIONAL CONSUME — all branches must consume live linears:
-    BRANCH @cond B_yes B_no
-    B_yes: CALL @f @v  ...
-    B_no:  DROP @v  RETURN @default
-
-13. STR_CHAR_AT DISPATCH — for ALL-CAPS Str enums (not SWITCH TAG):
-    @c = STR_CHAR_AT @op @zero   -- 65='A', 83='S', 77='M'
-    BRANCH (EQ @c (CONST 65)) B_add B_other
-
-14. MAP ACCUMULATE:
-    @m2 = MAP_PUT @m1 @key @val   -- @key and @val consumed
-
-15. HOF WITH FNREF:
-    @fn = CONST my_transform      -- FnRef is Copy
-    @result = VEC_MAP @v @fn      -- applies @fn to each element"#;
-
-const LML_ERRORS_SUMMARY: &str = r#"LML Error → Fix Quick Reference
-
-LINEARITY:
-  DROP on Copy type          → Int/Bool/Float/FnRef are Copy. Remove DROP.
-  value used after move      → Linear consumed. DUP before first use.
-  variable used twice        → VEC_PEEK/MAP_GET return-back, or DUP if Copy.
-  linear value not consumed  → Add DROP in missing branch.
-  CATCH arm binding not consumed → @data and @e are linear. Consume or DROP @e.
-  double-free in codegen     → Same Copy var passed twice to CALL — DUP first.
-
-TYPES:
-  ADD/SUB: Int and Float mismatch → TO_FLOAT @n before mixing.
-  Float literal is Int       → Write 2.0 not 2.
-  AND/OR/XOR: expected Bool  → For Int bitwise use BAND/BOR/BXOR/BNOT/SHL/SHR.
-  ASSERT condition not Bool  → EQ/LT/GT return Bool; use those.
-  TAG: expected Variant, got Str → ast_bridge emits leaf enums as ALL-CAPS Str. Use STR_CHAR_AT dispatch.
-  RETURN inside PROCESS      → Use HALT instead of RETURN.
-  SPAWN requires PROCESS     → Define spawned fn with PROCESS keyword.
-
-SSA / CONTROL FLOW:
-  block B1 does not terminate → Every block needs JUMP/BRANCH/RETURN/SWITCH/CATCH/HALT.
-  @name undefined in block   → Variable used before defined. Check PHI for loops.
-  PHI missing predecessor    → List every block that branches here.
-  PHI extra predecessor      → Remove the extra block label from PHI.
-  UNPACK target count N, expected M → Count must equal variant field count exactly.
-  BRANCH condition not Bool  → Use inline: BRANCH (GT @a @b) B1 B2.
-
-SYNTAX:
-  CALL arg is not a node ref → Bind first: @arg = CONST 42, then CALL @f @arg.
-  EFFECT arg is not a node ref → Same: bind literals before EFFECT.
-  tag name must be mixed-case → Some, Ok, Err — not SOME or some.
-  PACK field must use @noderef → PACK Some [@val] not PACK Some [val].
-  UNPACK field names have @   → UNPACK @v Some [value] not Some [@value].
-
-COLLECTIONS:
-  MAP_GET/VEC_PEEK container consumed → Thread container through SWITCH arms.
-  VEC_GET destroys Vec       → Use VEC_PEEK for reads inside loops.
-  HOF requires Copy callable → VEC_MAP/FILTER etc. need FnRef or Copy Closure.
-
-IMPORTS:
-  @helper undefined          → Add it to IMPORT [...] list in the importing file.
-  cyclic import detected     → Restructure; LML does not permit cycles.
-  selective import misses callee → Use IMPORT [*] AS @sh for transitive deps."#;
-
-const LML_CHECKLIST_SUMMARY: &str = r#"LML Agent Generation Checklist
-
-TYPES
-[ ] Float literals have decimal (2.0 not 2)
-[ ] Int bitwise: BAND/BOR/BXOR/BNOT/SHL/SHR (not AND/OR/XOR)
-[ ] Bool ops: AND/OR/XOR/NOT
-[ ] TO_FLOAT before mixing Int and Float
-[ ] ASSERT takes Bool
-
-LINEARITY
-[ ] Every linear var consumed exactly once on every path
-[ ] DUP before using a linear value twice
-[ ] DROP in every branch that doesn't naturally consume
-[ ] EFFECT ops consume ALL args — rebind CONST if needed
-[ ] VEC_PEEK / MAP_GET: thread container through SWITCH arms
-[ ] FileHandle / TcpHandle closed in all paths including Err
-[ ] CATCH bindings @data/@e are linear — consume or DROP
-[ ] DUP only on linear types (not Int/Bool/Float/FnRef)
-[ ] HOF requires Copy callable (FnRef or Copy Closure)
-
-CONTROL FLOW
-[ ] Every block has exactly one terminator
-[ ] PHI lists every predecessor — no more, no fewer
-[ ] BRANCH condition is Bool
-[ ] SWITCH(TAG) only on Variant — STR_CHAR_AT for ALL-CAPS Str enums
-[ ] PROCESS uses HALT not RETURN
-[ ] SPAWN takes PROCESS not FN
-
-SYNTAX
-[ ] CALL/EFFECT args are node refs — bind literals first with CONST
-[ ] PACK fields use @noderef
-[ ] UNPACK fields without @
-[ ] Tag names are mixed-case (Some, Ok, Err)
-[ ] No inline CONST in CALL args
-
-LOOPS / SSA
-[ ] PHI before first use of loop variable
-[ ] Back-edge variable name differs from entry name
-[ ] VEC_PEEK loop uses counter index not @zero (infinite loop trap)
-[ ] VEC_GET destroys Vec — use VEC_PEEK for reads inside loops
-
-IMPORTS
-[ ] New helpers in imported files added to IMPORT list
-[ ] No cyclic imports (diamond imports OK)
-[ ] IMPORT [*] AS @sh for transitive callees
-
-PROCESSES / CONCURRENCY
-[ ] Chan is linear — receive or close on all paths
-[ ] SPAWN takes PROCESS (not FN)
-[ ] HALT terminates PROCESS"#;
-
-// ---------------------------------------------------------------------------
-// Project tool — starter mesh creation
-// ---------------------------------------------------------------------------
-
-const PROJECT_TOOL_DEF: &str = r#"{"name":"project","description":"Create a starter LML project mesh with policy, code, and coms cruxes. The code crux is pre-seeded with 7 embedded LML knowledge nodes (types, linearity, control-flow, operations, patterns, errors, checklist) so agents can write correct LML without loading the full syntax reference. Query: crux action=query path=<project>/code/.crux.json query=\"lml-linearity\"","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["init"],"description":"Action to perform. Currently only 'init' is supported."},"name":{"type":"string","description":"Project name (used as crux names and mesh manifest name)"},"path":{"type":"string","description":"Directory to create the project in. Must exist."}},"required":["action","name","path"]}}"#;
+/// Extract a JSON string value from a flat object text, correctly handling
+/// escape sequences inside the value (e.g. \n, \", \\).
+/// Returns the decoded string, or None if the key isn't found.
+fn extract_json_string_value(obj: &str, key: &str) -> Option<String> {
+    let needle = format!("\"{}\"", key);
+    let mut pos = 0;
+    while pos < obj.len() {
+        let rel = obj[pos..].find(&needle)?;
+        let abs = pos + rel;
+        let after = &obj[abs + needle.len()..];
+        let colon_pos = after.find(':')?;
+        if !after[..colon_pos].trim().is_empty() {
+            // Not a key (needle appears inside a string value) — skip past it.
+            pos = abs + needle.len();
+            continue;
+        }
+        let val = after[colon_pos + 1..].trim_start();
+        let inner = val.strip_prefix('"')?;
+        // Scan forward respecting escape sequences.
+        let mut result = String::new();
+        let mut chars = inner.chars();
+        loop {
+            match chars.next() {
+                None       => break,
+                Some('"')  => break,
+                Some('\\') => match chars.next() {
+                    Some('n')  => result.push('\n'),
+                    Some('r')  => result.push('\r'),
+                    Some('t')  => result.push('\t'),
+                    Some('"')  => result.push('"'),
+                    Some('\\') => result.push('\\'),
+                    Some(c)    => { result.push('\\'); result.push(c); }
+                    None       => break,
+                },
+                Some(c)    => result.push(c),
+            }
+        }
+        return Some(result);
+    }
+    None
+}
+
+/// Extract an array of strings from `["lml","reference","types"]` syntax.
+fn extract_json_string_array(obj: &str, key: &str) -> Vec<String> {
+    let Some(arr_raw) = extract_array(obj, key) else { return Vec::new() };
+    // arr_raw is e.g. `["lml","reference","types"]`
+    let inner = arr_raw.trim_start_matches('[').trim_end_matches(']');
+    let mut result = Vec::new();
+    let mut rest = inner.trim_start();
+    while !rest.is_empty() {
+        rest = rest.trim_start_matches(',').trim_start();
+        if let Some(after_quote) = rest.strip_prefix('"') {
+            let mut s = String::new();
+            let mut chars = after_quote.chars();
+            let mut consumed = 1usize; // opening "
+            loop {
+                match chars.next() {
+                    None       => break,
+                    Some('"')  => { consumed += 1; break; }
+                    Some('\\') => {
+                        consumed += 1;
+                        match chars.next() {
+                            Some(c) => { consumed += 1; match c { 'n'=>s.push('\n'),'t'=>s.push('\t'),c=>s.push(c) } }
+                            None    => break,
+                        }
+                    }
+                    Some(c)    => { consumed += c.len_utf8(); s.push(c); }
+                }
+            }
+            result.push(s);
+            rest = &rest[consumed..];
+        } else {
+            break;
+        }
+    }
+    result
+}
+
+/// Split a top-level JSON array into individual object strings.
+/// Used to parse `[{...},{...},...]` from `lml --emit-knowledge` output.
+fn split_json_array_objects(text: &str) -> Vec<String> {
+    let text = text.trim();
+    let inner = match text.strip_prefix('[').and_then(|t| t.strip_suffix(']')) {
+        Some(s) => s.trim(),
+        None    => return Vec::new(),
+    };
+    let mut objects = Vec::new();
+    let mut depth = 0i32;
+    let mut obj_start: Option<usize> = None;
+    for (i, c) in inner.char_indices() {
+        match c {
+            '{' => {
+                if depth == 0 { obj_start = Some(i); }
+                depth += 1;
+            }
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    if let Some(start) = obj_start.take() {
+                        objects.push(inner[start..=i].to_string());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    objects
+}
+
+/// Call `lml --emit-knowledge` and parse the returned node array.
+/// Returns a Vec of (id, title, tags, body) tuples, or an empty Vec on any error.
+fn fetch_lml_knowledge_nodes(lml_bin: &str) -> Vec<(String, String, Vec<String>, String)> {
+    use std::process::Command;
+    let out = match Command::new(lml_bin).arg("--emit-knowledge").output() {
+        Ok(o) if o.status.success() => o,
+        _ => return Vec::new(),
+    };
+    let text = match std::str::from_utf8(&out.stdout) {
+        Ok(s) => s.to_string(),
+        Err(_) => return Vec::new(),
+    };
+    let mut nodes = Vec::new();
+    for obj in split_json_array_objects(&text) {
+        let id    = match extract_json_string_value(&obj, "id")    { Some(s) => s, None => continue };
+        let title = match extract_json_string_value(&obj, "title") { Some(s) => s, None => continue };
+        let body  = match extract_json_string_value(&obj, "body")  { Some(s) => s, None => continue };
+        let tags  = extract_json_string_array(&obj, "tags");
+        nodes.push((id, title, tags, body));
+    }
+    nodes
+}
+
+const PROJECT_TOOL_DEF: &str = r#"{"name":"project","description":"Create a starter LML project mesh with policy, code, and coms cruxes. When an lml binary is available (LML_BIN env), the code crux is seeded with LML knowledge nodes (types, linearity, control-flow, operations, patterns, errors, checklist) so agents can write correct LML without loading the full syntax reference. Query: crux action=query path=<project>/code/.crux.json query=\"lml-linearity\"","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["init"],"description":"Action to perform. Currently only 'init' is supported."},"name":{"type":"string","description":"Project name (used as crux names and mesh manifest name)"},"path":{"type":"string","description":"Directory to create the project in. Must exist."}},"required":["action","name","path"]}}"#;
 
 const OAUTH_AUTHORIZE_TOOL_DEF: &str = r#"{"name":"oauth_authorize","description":"Run the OAuth 2.1 PKCE authorization-code flow for a registered MCP server alias. Binds a random loopback port, prints the authorization URL for the user to open in a browser, captures the redirect callback, validates the state (CSRF guard), exchanges the code for tokens, and stores them encrypted. Paste fallback: supply code, state, and code_verifier (from a previous timed-out flow) to skip the listener.","inputSchema":{"type":"object","properties":{"alias":{"type":"string","description":"MCP server alias to authorize (must have an mcp_server_registration node in the policy crux with auth=oauth2)"},"code":{"type":"string","description":"Authorization code from the callback URL (paste fallback — requires state and code_verifier too)"},"state":{"type":"string","description":"State value from the callback URL (required when code is provided)"},"code_verifier":{"type":"string","description":"PKCE code_verifier from the previous timed-out flow (required when code is provided)"},"redirect_uri":{"type":"string","description":"redirect_uri used when opening the authorization URL (required when code is provided)"}},"required":["alias"]}}"#;
 
-fn build_code_crux(name: &str) -> String {
-    struct Node {
-        id: &'static str,
-        node_name: &'static str,
-        summary: &'static str,
-        tags: &'static [&'static str],
-    }
-    let nodes = [
-        Node { id: "lml-types",        node_name: "LML Types Reference",   summary: LML_TYPES_SUMMARY,        tags: &["lml", "reference", "types"] },
-        Node { id: "lml-linearity",    node_name: "LML Linearity Rules",    summary: LML_LINEARITY_SUMMARY,    tags: &["lml", "reference", "linearity"] },
-        Node { id: "lml-control-flow", node_name: "LML Control Flow",       summary: LML_CONTROL_FLOW_SUMMARY, tags: &["lml", "reference", "control-flow"] },
-        Node { id: "lml-operations",   node_name: "LML Operations",         summary: LML_OPERATIONS_SUMMARY,   tags: &["lml", "reference", "operations"] },
-        Node { id: "lml-patterns",     node_name: "LML Patterns Catalog",   summary: LML_PATTERNS_SUMMARY,     tags: &["lml", "reference", "patterns"] },
-        Node { id: "lml-errors",       node_name: "LML Error Map",          summary: LML_ERRORS_SUMMARY,       tags: &["lml", "reference", "errors"] },
-        Node { id: "lml-checklist",    node_name: "LML Agent Checklist",    summary: LML_CHECKLIST_SUMMARY,    tags: &["lml", "reference", "checklist"] },
-    ];
-    let nodes_json: Vec<String> = nodes.iter().map(|n| {
-        let tags_json = n.tags.iter().map(|t| format!("\"{}\"", t)).collect::<Vec<_>>().join(",");
+/// Build the code crux JSON for a new project.
+///
+/// Fetches LML knowledge nodes by calling `lml --emit-knowledge` (via LML_BIN).
+/// If the binary is unavailable or returns nothing, seeds zero LML nodes —
+/// generic projects that don't use LML shouldn't get an LML primer.
+///
+/// Returns `(crux_json, node_count)`.
+fn build_code_crux(name: &str) -> (String, usize) {
+    let lml_bin = find_lml_binary();
+    let fetched = fetch_lml_knowledge_nodes(&lml_bin);
+
+    let nodes_json: Vec<String> = fetched.iter().map(|(id, title, tags, body)| {
+        let tags_json = tags.iter().map(|t| json_escape(t)).collect::<Vec<_>>().join(",");
         format!(
             "{{\"id\":{},\"name\":{},\"kind\":\"document\",\"summary\":{},\"tags\":[{}],\"properties\":{{}}}}",
-            json_escape(n.id), json_escape(n.node_name), json_escape(n.summary), tags_json
+            json_escape(id), json_escape(title), json_escape(body), tags_json
         )
     }).collect();
-    format!(
+
+    let crux = format!(
         "{{\"crux_version\":2,\"crux_id\":{},\"crux_name\":{},\"crux_kind\":\"codebase\",\"nodes\":[{}],\"edges\":[]}}",
         json_escape(&format!("code-{}", name)),
         json_escape(&format!("{} code", name)),
         nodes_json.join(",")
-    )
+    );
+    (crux, fetched.len())
 }
 
 fn build_coms_crux(name: &str) -> String {
@@ -885,8 +693,8 @@ fn project_init_impl(name: &str, path_str: &str) -> Result<String, String> {
     fs::write(policy_dir.join(".crux.json"), &policy_crux)
         .map_err(|e| format!("write policy/.crux.json: {}", e))?;
 
-    // code crux — 7 embedded LML knowledge nodes
-    let code_crux = build_code_crux(name);
+    // code crux — LML knowledge nodes fetched from lml binary (0 if lml absent)
+    let (code_crux, lml_node_count) = build_code_crux(name);
     fs::write(code_dir.join(".crux.json"), &code_crux)
         .map_err(|e| format!("write code/.crux.json: {}", e))?;
 
@@ -914,8 +722,8 @@ fn project_init_impl(name: &str, path_str: &str) -> Result<String, String> {
         .map_err(|e| format!("write code/spec.crux: {}", e))?;
 
     Ok(format!(
-        "Created project '{}' at {}:\n  .crux-mesh.json\n  policy/.crux.json\n  code/.crux.json  (7 LML knowledge nodes embedded)\n  code/main.lml\n  code/spec.crux\n  coms/.crux.json  (#general channel + welcome message)\n\nQuery LML knowledge: crux action=query path={}/code/.crux.json query=\"lml-linearity\"",
-        name, path_str, path_str
+        "Created project '{}' at {}:\n  .crux-mesh.json\n  policy/.crux.json\n  code/.crux.json  ({} LML knowledge nodes seeded)\n  code/main.lml\n  code/spec.crux\n  coms/.crux.json  (#general channel + welcome message)\n\nQuery LML knowledge: crux action=query path={}/code/.crux.json query=\"lml-linearity\"",
+        name, path_str, lml_node_count, path_str
     ))
 }
 
@@ -3114,10 +2922,19 @@ mod tests {
         assert!(dir.join("code/main.lml").exists(), "code/main.lml missing");
         assert!(dir.join("code/spec.crux").exists(), "code/spec.crux missing");
 
-        // Code crux should contain knowledge nodes
+        // Code crux is always valid JSON.
         let code_crux = fs::read_to_string(dir.join("code/.crux.json")).unwrap();
-        assert!(code_crux.contains("lml-linearity"), "code crux missing lml-linearity node");
-        assert!(code_crux.contains("lml-checklist"), "code crux missing lml-checklist node");
+        assert!(code_crux.contains("\"crux_kind\":\"codebase\""), "code crux missing kind");
+
+        // If LML_BIN is set and points at a real lml binary, the knowledge nodes
+        // should be seeded. If not set (e.g. CI without the LML compiler), zero
+        // nodes are seeded — that is the correct behavior per the design.
+        if let Ok(bin) = std::env::var("LML_BIN") {
+            if std::path::Path::new(&bin).exists() {
+                assert!(code_crux.contains("lml-linearity"), "code crux missing lml-linearity node (LML_BIN={bin})");
+                assert!(code_crux.contains("lml-checklist"), "code crux missing lml-checklist node (LML_BIN={bin})");
+            }
+        }
 
         // Coms crux should have #general channel
         let coms_crux = fs::read_to_string(dir.join("coms/.crux.json")).unwrap();
