@@ -3091,7 +3091,8 @@ fn handle_initialize(id: &str) -> String {
     }
 
     let result = format!(
-        r#"{{"protocolVersion":"2024-11-05","capabilities":{{"tools":{{"listChanged":false}},"resources":{{"listChanged":false}}}},"serverInfo":{{"name":"crux-mesh","version":"0.1.0"}},"instructions":{}}}"#,
+        r#"{{"protocolVersion":"2024-11-05","capabilities":{{"tools":{{"listChanged":false}},"resources":{{"listChanged":false}}}},"serverInfo":{{"name":"crux-mesh","version":"{}"}},"instructions":{}}}"#,
+        env!("CARGO_PKG_VERSION"),
         json_escape(&instructions),
     );
     json_rpc_result_raw(id, &result)

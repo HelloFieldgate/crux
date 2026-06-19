@@ -58,7 +58,7 @@ fn main() {
             print_help();
         }
         "--version" | "-V" => {
-            eprintln!("crux-mesh 0.1.0");
+            eprintln!("crux-mesh {}", env!("CARGO_PKG_VERSION"));
         }
         "--mcp" => {
             crux_mesh::mcp::run_mcp_server();

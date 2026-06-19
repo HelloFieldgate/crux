@@ -330,7 +330,8 @@ fn merge_initialize_responses(lml_resp: &str, crux_resp: &str, project_summary: 
     };
 
     format!(
-        r#"{{"protocolVersion":"2024-11-05","capabilities":{{"tools":{{}},"resources":{{}}}},"serverInfo":{{"name":"crux-router","version":"0.1.0"}},"instructions":{}}}"#,
+        r#"{{"protocolVersion":"2024-11-05","capabilities":{{"tools":{{}},"resources":{{}}}},"serverInfo":{{"name":"crux-router","version":"{}"}},"instructions":{}}}"#,
+        env!("CARGO_PKG_VERSION"),
         json_escape(&instructions)
     )
 }
@@ -1186,8 +1187,11 @@ fn build_dynamic_registry(mesh_dir: &std::path::Path) -> (Vec<DynamicRegistratio
                     Ok(mut c) => {
                         eprintln!("[crux-router]   spawned '{}'", prog);
                         // Initialize the child so it's ready to serve tools/list and tools/call
-                        let init_msg = r#"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"crux-router","version":"0.1.0"}}}"#;
-                        let _ = c.send(init_msg);
+                        let init_msg = format!(
+                            r#"{{"jsonrpc":"2.0","id":0,"method":"initialize","params":{{"protocolVersion":"2024-11-05","capabilities":{{}},"clientInfo":{{"name":"crux-router","version":"{}"}}}}}}"#,
+                            env!("CARGO_PKG_VERSION")
+                        );
+                        let _ = c.send(&init_msg);
                         let _ = c.recv();
                         let _ = c.send(r#"{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}"#);
                         (Some(c), None)
