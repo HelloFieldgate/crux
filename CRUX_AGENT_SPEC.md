@@ -20,15 +20,17 @@ A crux can:
 
 Choose the path that matches your situation.
 
+> Tool calls use the unified form `tool action=<action>` (e.g. `mesh action=status`). The legacy single-purpose names shown in some examples below (`mesh_init`, `crux_create`, …) remain valid aliases.
+
 ### Path A: Join an existing mesh
 
 ```
-1. mesh_status    mesh_path=<path>          # discover members, health, cross-edges
-2. mesh_query     query="<topic>"           # find relevant nodes across all cruxes
-3. crux_load      path=<member-crux-path>   # inspect a specific crux in detail
-4. crux_query     path=<member>  query="…"  # drill into one crux
-5. crux_resolve   path=<member>  node_name="<name>"   # find source file for a node
-6. crux_extract   path=<member>  node_name="<name>"   # read original source bytes
+1. mesh action=status    mesh_path=<path>          # discover members, health, cross-edges
+2. mesh action=query     query="<topic>"           # find relevant nodes across all cruxes
+3. crux action=load      path=<member-crux-path>   # inspect a specific crux in detail
+4. crux action=query     path=<member>  query="…"  # drill into one crux
+5. crux action=resolve   path=<member>  node_name="<name>"   # find source file for a node
+6. crux action=extract   path=<member>  node_name="<name>"   # read original source bytes
 ```
 
 ### Path B: Start a new crux and mesh

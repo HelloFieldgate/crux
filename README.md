@@ -238,7 +238,7 @@ TODO: Add screenshots before public announcement.
 - **Crux** — a single `.crux.json` file; a typed directed graph for one domain. Eight kinds: `codebase`, `documentation`, `preferences`, `organization`, `skillset`, `api`, `dataset`, `custom`.
 - **Node** — one unit of knowledge: `name`, `kind`, `summary` (≤200 chars), `tags`, `classification`, `properties`, `planning`, `source_ref.*`. Full schema: [CRUX_AGENT_SPEC.md §3](CRUX_AGENT_SPEC.md).
 - **Edge** — a typed directed relationship. Seventeen kinds including `calls`, `imports`, `contains`, `data_flow`, `mesh_link`. Can be cross-crux.
-- **Mesh** — a network of cruxes linked by a `.crux-mesh.json` manifest. Each member gets a W-OTS keypair; `mesh_query` searches all members in one call.
+- **Mesh** — a network of cruxes linked by a `.crux-mesh.json` manifest. Each member gets a W-OTS keypair; `mesh action=query` searches all members in one call.
 - **Cluster** — an access-control grouping inside a mesh. Cruxes in a `confidential` cluster are invisible to agents below that clearance.
 
 ---
@@ -259,7 +259,7 @@ Legacy single-purpose names (`crux_create`, `mesh_init`, `crux_add_node`, …) a
 
 ## Security & the Policy Router
 
-Running `crux-router --policy-router` turns your mesh's policy crux into a **single trusted MCP endpoint**. Agents register external MCP servers into it via `mesh_register_mcp`. On every forwarded call, the router checks clearance, scans for injection, sanitizes the response, enforces the rate limit, and appends a W-OTS-signed entry to the audit chain. Without this setup, every MCP server you add is an implicit trust boundary. With it, you have one.
+Running `crux-router --policy-router` turns your mesh's policy crux into a **single trusted MCP endpoint**. Agents register external MCP servers into it via `mesh action=register_mcp`. On every forwarded call, the router checks clearance, scans for injection, sanitizes the response, enforces the rate limit, and appends a W-OTS-signed entry to the audit chain. Without this setup, every MCP server you add is an implicit trust boundary. With it, you have one.
 
 The Policy Router is fully implemented (Phases 0–4E complete). See [CRUX_ROUTER_SPEC.md](CRUX_ROUTER_SPEC.md) for the full reference and [crux_router_evolution.md](crux_router_evolution.md) for the implementation log.
 
