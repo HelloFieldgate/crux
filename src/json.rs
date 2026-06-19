@@ -74,21 +74,59 @@ pub fn json_opt_u8(val: &Option<u8>) -> String {
 // Parsing
 // ===========================================================================
 
-/// Find the byte-index of `pattern` in `text` where the character immediately
-/// following `pattern` (after any whitespace) is `':'`, anchoring the match to
-/// a genuine JSON key position.  This prevents false-positives when a key name
-/// appears as a field *value* earlier in the same JSON blob
+/// Find the byte-index of the genuine JSON key `pattern` (a quoted key name such
+/// as `"\"name\""`) in `text`.
+///
+/// String-aware: the scan walks `text` one string token at a time, so a key name
+/// that appears *inside a value string* is never mistaken for a real key. This
+/// matters once object boundaries are correct but a value still contains
+/// key-shaped text, e.g. a `summary` whose content is literally
+/// `{"name": "fake"}` — the real top-level `name` is still resolved.
+///
+/// A token qualifies as a key when its decoded-quote span equals the key name
+/// and the next non-whitespace character after its closing quote is `':'`. This
+/// also skips occurrences where the key name appears as a *value*
 /// (e.g. `{"action":"query","query":"foo"}`).
 fn find_json_key(text: &str, pattern: &str) -> Option<usize> {
-    let mut start = 0;
-    while let Some(rel) = text[start..].find(pattern) {
-        let idx = start + rel;
-        let after = &text[idx + pattern.len()..];
-        if after.trim_start().starts_with(':') {
-            return Some(idx);
+    // `pattern` is the key wrapped in quotes; compare against the inner name.
+    let key = pattern.trim_matches('"');
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'"' {
+            i += 1;
+            continue;
         }
-        // This occurrence was a value, not a key — skip past it and keep searching.
-        start = idx + 1;
+        // Start of a string token at byte i — find its unescaped closing quote.
+        let mut j = i + 1;
+        let mut escaped = false;
+        while j < bytes.len() {
+            let c = bytes[j];
+            if escaped {
+                escaped = false;
+            } else if c == b'\\' {
+                escaped = true;
+            } else if c == b'"' {
+                break;
+            }
+            j += 1;
+        }
+        if j >= bytes.len() {
+            // Unterminated string — nothing more can be a valid key.
+            break;
+        }
+        // Quotes are ASCII, so [i+1..j] is a valid UTF-8 boundary slice.
+        if &text[i + 1..j] == key {
+            let mut k = j + 1;
+            while k < bytes.len() && matches!(bytes[k], b' ' | b'\t' | b'\n' | b'\r') {
+                k += 1;
+            }
+            if k < bytes.len() && bytes[k] == b':' {
+                return Some(i);
+            }
+        }
+        // Skip past this entire string token (value or non-matching key).
+        i = j + 1;
     }
     None
 }
@@ -447,6 +485,76 @@ mod tests {
         // The key "status" appears as a value for "kind", then as a real key.
         let line = r#"{"kind":"status","status":"approved"}"#;
         assert_eq!(extract_string_value(line, "status"), Some("approved".to_string()));
+    }
+
+    #[test]
+    fn test_find_json_key_ignores_key_inside_value_string() {
+        // A value string that literally contains `"name": "fake"` must not shadow
+        // the real `name` key that appears *after* it in the object.
+        let obj = r#"{"summary":"snippet \"name\": \"fake\" here","name":"real"}"#;
+        assert_eq!(extract_string_value(obj, "name"), Some("real".to_string()));
+        assert_eq!(
+            extract_string_value(obj, "summary"),
+            Some(r#"snippet "name": "fake" here"#.to_string())
+        );
+    }
+
+    #[test]
+    fn test_find_json_key_ignores_colon_bearing_value() {
+        // The value of `summary` contains `tags:` text — must not be read as the
+        // `tags` array key, and the real array (after) must still extract.
+        let obj = r#"{"summary":"has tags: a, b, c","tags":["x","y"]}"#;
+        assert_eq!(
+            extract_string_value(obj, "summary"),
+            Some("has tags: a, b, c".to_string())
+        );
+        assert_eq!(extract_string_array(obj, "tags"), vec!["x", "y"]);
+    }
+
+    #[test]
+    fn test_extract_json_objects_empty_array() {
+        assert!(extract_json_objects_from_array("[]").is_empty());
+        assert!(extract_json_objects_from_array("[   ]").is_empty());
+    }
+
+    #[test]
+    fn test_extract_json_objects_single() {
+        let objs = extract_json_objects_from_array(r#"[{"a":"b"}]"#);
+        assert_eq!(objs, vec![r#"{"a":"b"}"#.to_string()]);
+    }
+
+    #[test]
+    fn test_extract_json_objects_nested() {
+        let objs = extract_json_objects_from_array(r#"[{"a":{"b":"c"}},{"d":"e"}]"#);
+        assert_eq!(objs.len(), 2);
+        assert_eq!(objs[0], r#"{"a":{"b":"c"}}"#);
+        assert_eq!(objs[1], r#"{"d":"e"}"#);
+    }
+
+    #[test]
+    fn test_extract_json_objects_structural_chars_in_strings() {
+        // Every structural char appears inside string values — depth must be
+        // unaffected, so both objects are returned intact.
+        let objs = extract_json_objects_from_array(r#"[{"s":"]}{[ )} ){"},{"t":"plain"}]"#);
+        assert_eq!(objs.len(), 2);
+        assert_eq!(objs[0], r#"{"s":"]}{[ )} ){"}"#);
+        assert_eq!(objs[1], r#"{"t":"plain"}"#);
+    }
+
+    #[test]
+    fn test_extract_json_objects_trailing_ws_and_commas() {
+        let objs = extract_json_objects_from_array(r#"[ {"a":"1"} , {"a":"2"} ]  "#);
+        assert_eq!(objs.len(), 2);
+        assert_eq!(objs[0], r#"{"a":"1"}"#);
+        assert_eq!(objs[1], r#"{"a":"2"}"#);
+    }
+
+    #[test]
+    fn test_extract_json_objects_escaped_quote_then_brace() {
+        // An escaped quote followed by a structural brace inside a value.
+        let objs = extract_json_objects_from_array(r#"[{"s":"say \"hi\" }"},{"s":"ok"}]"#);
+        assert_eq!(objs.len(), 2);
+        assert_eq!(objs[0], r#"{"s":"say \"hi\" }"}"#);
     }
 }
 

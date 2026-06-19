@@ -10,8 +10,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::crypto::sha256_hex;
 use crate::json::{
-    extract_bool_value, extract_string_array, extract_string_value, extract_u64_value,
-    is_null_value, json_escape, json_opt_str, json_opt_u64, json_opt_u8, json_str_array,
+    extract_bool_value, extract_json_objects_from_array, extract_string_array, extract_string_value,
+    extract_u64_value, is_null_value, json_escape, json_opt_str, json_opt_u64, json_opt_u8,
+    json_str_array,
 };
 
 // ===========================================================================
@@ -695,26 +696,11 @@ fn parse_nodes(text: &str) -> Vec<CruxNode> {
     };
     let array_text = &after[bracket..];
 
-    // Split on node objects by finding `{` ... `}` at the node level
-    let mut depth = 0;
-    let mut start = None;
-    for (i, c) in array_text.char_indices() {
-        match c {
-            '[' if depth == 0 => { depth = 1; }
-            ']' if depth == 1 => break,
-            '{' if depth == 1 => { depth = 2; start = Some(i); }
-            '{' => { depth += 1; }
-            '}' if depth == 2 => {
-                if let Some(s) = start {
-                    let obj = &array_text[s..=i];
-                    nodes.push(parse_single_node(obj));
-                }
-                depth = 1;
-                start = None;
-            }
-            '}' => { depth -= 1; }
-            _ => {}
-        }
+    // Split on node objects with the shared string-aware scanner, so structural
+    // brackets inside string values (e.g. a `summary` containing `{children && (`)
+    // don't corrupt the depth counter and silently drop this node and all after it.
+    for obj in extract_json_objects_from_array(array_text) {
+        nodes.push(parse_single_node(&obj));
     }
     nodes
 }
@@ -795,32 +781,12 @@ fn parse_schema_slots(obj: &str, key: &str) -> Vec<SchemaSlot> {
         None => return slots,
     };
     let array_text = &after[bracket..];
-    let end = match array_text.find(']') {
-        Some(i) => i,
-        None => return slots,
-    };
-    let inner = &array_text[1..end];
 
-    // Find each { "name": ..., "type": ... }
-    let mut depth = 0;
-    let mut start = None;
-    for (i, c) in inner.char_indices() {
-        match c {
-            '{' if depth == 0 => { depth = 1; start = Some(i); }
-            '{' => { depth += 1; }
-            '}' if depth == 1 => {
-                if let Some(s) = start {
-                    let slot_obj = &inner[s..=i];
-                    let name = extract_string_value(slot_obj, "name").unwrap_or_default();
-                    let type_str = extract_string_value(slot_obj, "type").unwrap_or_default();
-                    slots.push(SchemaSlot { name, type_str });
-                }
-                depth = 0;
-                start = None;
-            }
-            '}' => { depth -= 1; }
-            _ => {}
-        }
+    // Split each { "name": ..., "type": ... } string-awarely.
+    for slot_obj in extract_json_objects_from_array(array_text) {
+        let name = extract_string_value(&slot_obj, "name").unwrap_or_default();
+        let type_str = extract_string_value(&slot_obj, "type").unwrap_or_default();
+        slots.push(SchemaSlot { name, type_str });
     }
     slots
 }
@@ -839,47 +805,31 @@ fn parse_edges(text: &str) -> Vec<CruxEdge> {
     };
     let array_text = &after[bracket..];
 
-    let mut depth = 0;
-    let mut start = None;
-    for (i, c) in array_text.char_indices() {
-        match c {
-            '[' if depth == 0 => { depth = 1; }
-            ']' if depth == 1 => break,
-            '{' if depth == 1 => { depth = 2; start = Some(i); }
-            '{' => { depth += 1; }
-            '}' if depth == 2 => {
-                if let Some(s) = start {
-                    let obj = &array_text[s..=i];
-                    let edge_id = extract_string_value(obj, "edge_id").unwrap_or_default();
-                    let src = extract_string_value(obj, "src").unwrap_or_default();
-                    let dst = extract_string_value(obj, "dst").unwrap_or_default();
-                    let kind_str = extract_string_value(obj, "kind").unwrap_or_else(|| "relates_to".to_string());
-                    let weight = extract_weight(obj);
-                    let detail = extract_string_value(obj, "detail").unwrap_or_default();
-                    let cross_crux = extract_bool_value(obj, "cross_crux").unwrap_or(false);
-                    let binding = extract_string_value(obj, "binding").unwrap_or_default();
-                    let created_at = extract_u64_value(obj, "created_at").unwrap_or(0);
-                    let dangling = extract_bool_value(obj, "dangling").unwrap_or(false);
+    for obj in extract_json_objects_from_array(array_text) {
+        let obj = obj.as_str();
+        let edge_id = extract_string_value(obj, "edge_id").unwrap_or_default();
+        let src = extract_string_value(obj, "src").unwrap_or_default();
+        let dst = extract_string_value(obj, "dst").unwrap_or_default();
+        let kind_str = extract_string_value(obj, "kind").unwrap_or_else(|| "relates_to".to_string());
+        let weight = extract_weight(obj);
+        let detail = extract_string_value(obj, "detail").unwrap_or_default();
+        let cross_crux = extract_bool_value(obj, "cross_crux").unwrap_or(false);
+        let binding = extract_string_value(obj, "binding").unwrap_or_default();
+        let created_at = extract_u64_value(obj, "created_at").unwrap_or(0);
+        let dangling = extract_bool_value(obj, "dangling").unwrap_or(false);
 
-                    edges.push(CruxEdge {
-                        edge_id,
-                        src,
-                        dst,
-                        kind: EdgeKind::from_str(&kind_str),
-                        weight,
-                        detail,
-                        cross_crux,
-                        binding,
-                        created_at,
-                        dangling,
-                    });
-                }
-                depth = 1;
-                start = None;
-            }
-            '}' => { depth -= 1; }
-            _ => {}
-        }
+        edges.push(CruxEdge {
+            edge_id,
+            src,
+            dst,
+            kind: EdgeKind::from_str(&kind_str),
+            weight,
+            detail,
+            cross_crux,
+            binding,
+            created_at,
+            dangling,
+        });
     }
     edges
 }
@@ -918,29 +868,13 @@ fn parse_modules(text: &str) -> Vec<ModuleNode> {
     };
     let array_text = &after[bracket..];
 
-    let mut depth = 0;
-    let mut obj_start = None;
-    for (i, c) in array_text.char_indices() {
-        match c {
-            '[' if depth == 0 => { depth = 1; }
-            ']' if depth == 1 => break,
-            '{' if depth == 1 => { depth = 2; obj_start = Some(i); }
-            '{' => { depth += 1; }
-            '}' if depth == 2 => {
-                if let Some(s) = obj_start {
-                    let obj = &array_text[s..=i];
-                    let path = extract_string_value(obj, "path").unwrap_or_default();
-                    let content_hash = extract_string_value(obj, "content_hash").unwrap_or_default();
-                    let node_count = extract_u64_value(obj, "node_count").unwrap_or(0) as usize;
-                    let last_analyzed = extract_u64_value(obj, "last_analyzed").unwrap_or(0);
-                    modules.push(ModuleNode { path, content_hash, node_count, last_analyzed });
-                }
-                depth = 1;
-                obj_start = None;
-            }
-            '}' => { depth -= 1; }
-            _ => {}
-        }
+    for obj in extract_json_objects_from_array(array_text) {
+        let obj = obj.as_str();
+        let path = extract_string_value(obj, "path").unwrap_or_default();
+        let content_hash = extract_string_value(obj, "content_hash").unwrap_or_default();
+        let node_count = extract_u64_value(obj, "node_count").unwrap_or(0) as usize;
+        let last_analyzed = extract_u64_value(obj, "last_analyzed").unwrap_or(0);
+        modules.push(ModuleNode { path, content_hash, node_count, last_analyzed });
     }
     modules
 }
@@ -959,27 +893,10 @@ fn parse_domains(text: &str) -> Vec<DomainNode> {
     };
     let array_text = &after[bracket..];
 
-    let mut depth = 0;
-    let mut obj_start = None;
-    for (i, c) in array_text.char_indices() {
-        match c {
-            '[' if depth == 0 => { depth = 1; }
-            ']' if depth == 1 => break,
-            '{' if depth == 1 => { depth = 2; obj_start = Some(i); }
-            '{' => { depth += 1; }
-            '}' if depth == 2 => {
-                if let Some(s) = obj_start {
-                    let obj = &array_text[s..=i];
-                    let tag = extract_string_value(obj, "tag").unwrap_or_default();
-                    let member_count = extract_u64_value(obj, "member_count").unwrap_or(0) as usize;
-                    domains.push(DomainNode { tag, member_count });
-                }
-                depth = 1;
-                obj_start = None;
-            }
-            '}' => { depth -= 1; }
-            _ => {}
-        }
+    for obj in extract_json_objects_from_array(array_text) {
+        let tag = extract_string_value(&obj, "tag").unwrap_or_default();
+        let member_count = extract_u64_value(&obj, "member_count").unwrap_or(0) as usize;
+        domains.push(DomainNode { tag, member_count });
     }
     domains
 }
@@ -999,30 +916,14 @@ fn parse_mesh_memberships(text: &str) -> Vec<MeshMembership> {
     };
     let array_text = &after[bracket..];
 
-    let mut depth = 0;
-    let mut obj_start = None;
-    for (i, c) in array_text.char_indices() {
-        match c {
-            '[' if depth == 0 => { depth = 1; }
-            ']' if depth == 1 => break,
-            '{' if depth == 1 => { depth = 2; obj_start = Some(i); }
-            '{' => { depth += 1; }
-            '}' if depth == 2 => {
-                if let Some(s) = obj_start {
-                    let obj = &array_text[s..=i];
-                    let mesh_id   = extract_string_value(obj, "mesh_id").unwrap_or_default();
-                    let mesh_name = extract_string_value(obj, "mesh_name").unwrap_or_default();
-                    let joined_at = extract_u64_value(obj, "joined_at").unwrap_or(0);
-                    let cluster   = extract_string_value(obj, "cluster");
-                    let public_key_hash = extract_string_value(obj, "public_key_hash").unwrap_or_default();
-                    memberships.push(MeshMembership { mesh_id, mesh_name, joined_at, cluster, public_key_hash });
-                }
-                depth = 1;
-                obj_start = None;
-            }
-            '}' => { depth -= 1; }
-            _ => {}
-        }
+    for obj in extract_json_objects_from_array(array_text) {
+        let obj = obj.as_str();
+        let mesh_id   = extract_string_value(obj, "mesh_id").unwrap_or_default();
+        let mesh_name = extract_string_value(obj, "mesh_name").unwrap_or_default();
+        let joined_at = extract_u64_value(obj, "joined_at").unwrap_or(0);
+        let cluster   = extract_string_value(obj, "cluster");
+        let public_key_hash = extract_string_value(obj, "public_key_hash").unwrap_or_default();
+        memberships.push(MeshMembership { mesh_id, mesh_name, joined_at, cluster, public_key_hash });
     }
     memberships
 }
@@ -2111,5 +2012,95 @@ mod tests {
         assert!(parsed.oauth_authorization_endpoint.is_empty());
         assert!(parsed.oauth_token_endpoint.is_empty());
         assert_eq!(parsed.oauth_registration_endpoint, "https://auth.example.com/register");
+    }
+
+    // --- String-aware JSON scanner regression tests ---------------------------
+
+    /// Build a 3-node db (@a, @mid, @b) where @mid carries an arbitrary summary.
+    fn db_with_middle_summary(summary: &str) -> CruxDb {
+        let mut db = create_crux_db("brackets", CruxKind::Codebase, "test");
+        for (name, sum) in [("@a", "first"), ("@mid", summary), ("@b", "third")] {
+            db.nodes.push(CruxNode {
+                node_id: generate_node_id(name, "h"),
+                name: name.to_string(),
+                kind: "function".to_string(),
+                module: String::new(),
+                summary: sum.to_string(),
+                schema: NodeSchema { inputs: Vec::new(), outputs: Vec::new() },
+                tags: vec!["doc".to_string()],
+                reach: Vec::new(),
+                properties: Vec::new(),
+                warnings: Vec::new(),
+                planning: PlanningMetadata::done(),
+                security: SecurityMetadata::internal(),
+                content_hash: "sha256:h".to_string(),
+                deleted_at: None,
+            });
+        }
+        db
+    }
+
+    #[test]
+    fn test_parse_nodes_unbalanced_brackets_no_cascade() {
+        // Each of these in a middle node's summary used to corrupt the bracket
+        // depth counter and silently drop @mid and every node after it.
+        let cases = [
+            "}",
+            "{",
+            "]",
+            "[",
+            "){",
+            ")}",
+            "code: {children && (<>x</>)}",
+            "escaped \" then }",
+            "unbalanced {children && (",
+            "tail ] oops",
+        ];
+        for case in cases {
+            let json = serialize_crux_db(&db_with_middle_summary(case));
+            let parsed = parse_crux_db(&json).unwrap();
+            assert_eq!(parsed.nodes.len(), 3, "node cascade-dropped for case {case:?}");
+            assert_eq!(parsed.nodes[0].name, "@a", "case {case:?}");
+            assert_eq!(parsed.nodes[1].name, "@mid", "case {case:?}");
+            assert_eq!(parsed.nodes[2].name, "@b", "case {case:?}");
+            // The offending node's summary round-trips exactly...
+            assert_eq!(parsed.nodes[1].summary, case, "summary mangled for case {case:?}");
+            // ...and the node *after* it is fully intact (not partially parsed).
+            assert_eq!(parsed.nodes[2].tags, vec!["doc".to_string()], "case {case:?}");
+        }
+    }
+
+    #[test]
+    fn test_parse_nodes_embedded_key_not_confused() {
+        // A summary that literally contains key-shaped text must not shadow the
+        // node's real `name` (which is serialized before `summary`, but the value
+        // is also resolvable for fields after it now that find_json_key is
+        // string-aware).
+        let json = serialize_crux_db(&db_with_middle_summary(r#"{"name": "fake", "kind": "bogus"}"#));
+        let parsed = parse_crux_db(&json).unwrap();
+        assert_eq!(parsed.nodes.len(), 3);
+        assert_eq!(parsed.nodes[1].name, "@mid");
+        assert_eq!(parsed.nodes[1].kind, "function");
+        assert_eq!(parsed.nodes[1].summary, r#"{"name": "fake", "kind": "bogus"}"#);
+    }
+
+    #[test]
+    fn test_roundtrip_bracket_laden_summaries() {
+        // Full CruxDb round-trip with bracket/quote/backslash-laden summaries.
+        let mut db = make_test_db();
+        db.nodes[0].summary = r#"JSX: {children && (<a href="x">y</a>)}"#.to_string();
+        db.nodes[1].summary = r#"path C:\tmp\f and tail ] plus { open"#.to_string();
+        let before_count = db.nodes.len();
+
+        let parsed = parse_crux_db(&serialize_crux_db(&db)).unwrap();
+
+        assert_eq!(parsed.nodes.len(), before_count);
+        for (orig, got) in db.nodes.iter().zip(parsed.nodes.iter()) {
+            assert_eq!(got.name, orig.name);
+            assert_eq!(got.summary, orig.summary);
+            assert_eq!(got.tags, orig.tags);
+            assert_eq!(got.kind, orig.kind);
+        }
+        assert_eq!(parsed.edges.len(), db.edges.len());
     }
 }

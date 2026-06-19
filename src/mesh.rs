@@ -8,7 +8,10 @@ use std::fmt::Write as FmtWrite;
 use std::path::{Path, PathBuf};
 
 use crate::crypto::sha256_hex;
-use crate::json::{extract_string_value, extract_u64_value, json_escape, json_opt_str};
+use crate::json::{
+    extract_json_objects_from_array, extract_string_value, extract_u64_value, json_escape,
+    json_opt_str,
+};
 use crate::schema::{load_crux_db, now_unix, CruxDb, CruxKind};
 
 // ===========================================================================
@@ -344,59 +347,40 @@ fn parse_members(text: &str) -> Vec<MeshMember> {
     };
     let array_text = &after[bracket..];
 
-    let mut depth = 0;
-    let mut obj_start = None;
-    for (i, c) in array_text.char_indices() {
-        match c {
-            '[' if depth == 0 => depth = 1,
-            ']' if depth == 1 => break,
-            '{' if depth == 1 => {
-                depth = 2;
-                obj_start = Some(i);
-            }
-            '{' => depth += 1,
-            '}' if depth == 2 => {
-                if let Some(s) = obj_start {
-                    let obj = &array_text[s..=i];
-                    let crux_id = extract_string_value(obj, "crux_id").unwrap_or_default();
-                    let crux_name = extract_string_value(obj, "crux_name").unwrap_or_default();
-                    let crux_kind_str = extract_string_value(obj, "crux_kind")
-                        .unwrap_or_else(|| "codebase".to_string());
-                    let path = extract_string_value(obj, "path").unwrap_or_default();
-                    let socket = extract_string_value(obj, "socket");
-                    let status = extract_string_value(obj, "status")
-                        .unwrap_or_else(|| "offline".to_string());
-                    let last_seen = extract_u64_value(obj, "last_seen").unwrap_or(0);
-                    let replica_group = extract_string_value(obj, "replica_group");
-                    let cluster = extract_string_value(obj, "cluster");
-                    let mesh_public_key_hex = extract_string_value(obj, "mesh_public_key")
-                        .unwrap_or_default();
-                    let mesh_private_key_hex = extract_string_value(obj, "mesh_private_key")
-                        .unwrap_or_default();
+    for obj in extract_json_objects_from_array(array_text) {
+        let obj = obj.as_str();
+        let crux_id = extract_string_value(obj, "crux_id").unwrap_or_default();
+        let crux_name = extract_string_value(obj, "crux_name").unwrap_or_default();
+        let crux_kind_str = extract_string_value(obj, "crux_kind")
+            .unwrap_or_else(|| "codebase".to_string());
+        let path = extract_string_value(obj, "path").unwrap_or_default();
+        let socket = extract_string_value(obj, "socket");
+        let status = extract_string_value(obj, "status")
+            .unwrap_or_else(|| "offline".to_string());
+        let last_seen = extract_u64_value(obj, "last_seen").unwrap_or(0);
+        let replica_group = extract_string_value(obj, "replica_group");
+        let cluster = extract_string_value(obj, "cluster");
+        let mesh_public_key_hex = extract_string_value(obj, "mesh_public_key")
+            .unwrap_or_default();
+        let mesh_private_key_hex = extract_string_value(obj, "mesh_private_key")
+            .unwrap_or_default();
 
-                    let mesh_public_key = hex_to_bytes(&mesh_public_key_hex).unwrap_or_default();
-                    let mesh_private_key = hex_to_bytes(&mesh_private_key_hex).unwrap_or_default();
+        let mesh_public_key = hex_to_bytes(&mesh_public_key_hex).unwrap_or_default();
+        let mesh_private_key = hex_to_bytes(&mesh_private_key_hex).unwrap_or_default();
 
-                    members.push(MeshMember {
-                        crux_id,
-                        crux_name,
-                        crux_kind: CruxKind::from_str(&crux_kind_str),
-                        path,
-                        socket,
-                        status,
-                        last_seen,
-                        replica_group,
-                        cluster,
-                        mesh_public_key,
-                        mesh_private_key,
-                    });
-                }
-                depth = 1;
-                obj_start = None;
-            }
-            '}' => depth -= 1,
-            _ => {}
-        }
+        members.push(MeshMember {
+            crux_id,
+            crux_name,
+            crux_kind: CruxKind::from_str(&crux_kind_str),
+            path,
+            socket,
+            status,
+            last_seen,
+            replica_group,
+            cluster,
+            mesh_public_key,
+            mesh_private_key,
+        });
     }
     members
 }
@@ -415,38 +399,18 @@ fn parse_cross_edges(text: &str) -> Vec<CrossEdgeRef> {
     };
     let array_text = &after[bracket..];
 
-    let mut depth = 0;
-    let mut obj_start = None;
-    for (i, c) in array_text.char_indices() {
-        match c {
-            '[' if depth == 0 => depth = 1,
-            ']' if depth == 1 => break,
-            '{' if depth == 1 => {
-                depth = 2;
-                obj_start = Some(i);
-            }
-            '{' => depth += 1,
-            '}' if depth == 2 => {
-                if let Some(s) = obj_start {
-                    let obj = &array_text[s..=i];
-                    let src_crux = extract_string_value(obj, "src_crux").unwrap_or_default();
-                    let dst_crux = extract_string_value(obj, "dst_crux").unwrap_or_default();
-                    let edge_count =
-                        extract_u64_value(obj, "edge_count").unwrap_or(0) as usize;
-                    let last_synced = extract_u64_value(obj, "last_synced").unwrap_or(0);
-                    edges.push(CrossEdgeRef {
-                        src_crux,
-                        dst_crux,
-                        edge_count,
-                        last_synced,
-                    });
-                }
-                depth = 1;
-                obj_start = None;
-            }
-            '}' => depth -= 1,
-            _ => {}
-        }
+    for obj in extract_json_objects_from_array(array_text) {
+        let obj = obj.as_str();
+        let src_crux = extract_string_value(obj, "src_crux").unwrap_or_default();
+        let dst_crux = extract_string_value(obj, "dst_crux").unwrap_or_default();
+        let edge_count = extract_u64_value(obj, "edge_count").unwrap_or(0) as usize;
+        let last_synced = extract_u64_value(obj, "last_synced").unwrap_or(0);
+        edges.push(CrossEdgeRef {
+            src_crux,
+            dst_crux,
+            edge_count,
+            last_synced,
+        });
     }
     edges
 }
@@ -1300,9 +1264,28 @@ pub fn probe_capabilities(reg: &crate::schema::McpServerRegistration) -> Result<
     if let Some(pos) = tools_resp.find(needle) {
         let rest = &tools_resp[pos + needle.len()..].trim_start();
         if rest.starts_with('[') {
-            // Find matching bracket
+            // Find the matching close bracket, string-awarely: a `[`/`]` inside a
+            // quoted string (e.g. a tool description containing `[WARN]`) must not
+            // affect bracket depth.
             let mut depth = 0usize;
+            let mut in_str = false;
+            let mut escaped = false;
             for (i, c) in rest.char_indices() {
+                if escaped {
+                    escaped = false;
+                    continue;
+                }
+                if c == '\\' && in_str {
+                    escaped = true;
+                    continue;
+                }
+                if c == '"' {
+                    in_str = !in_str;
+                    continue;
+                }
+                if in_str {
+                    continue;
+                }
                 match c {
                     '[' => depth += 1,
                     ']' => {
