@@ -3,6 +3,11 @@
 //! Spawns `lml --mcp` and `crux --mcp` as child processes, reads JSON-RPC 2.0
 //! from stdin, routes tool calls by name prefix, and merges protocol responses.
 //!
+//! The crux child is required; the LML compiler child is optional. If the `lml`
+//! binary can't be located (see `find_lml_binary`), the router degrades to
+//! crux-only: `lml_*` tools are omitted from tools/list and return a
+//! "not available" error if called directly. Set `LML_BIN` to enable them.
+//!
 //! Routing rules:
 //!   lml_*           → LML compiler child
 //!   crux_* / mesh_* → Crux Mesh child
@@ -2450,11 +2455,25 @@ fn run_router(policy_router_mode: bool) -> Result<(), String> {
     let lml_bin = find_lml_binary();
     let crux_bin = find_crux_binary();
 
-    eprintln!("[crux-router] Starting LML child: {} --mcp", lml_bin);
     eprintln!("[crux-router] Starting Crux child: {} --mcp", crux_bin);
-
-    let mut lml = McpChild::spawn(&lml_bin, &["--mcp"])?;
     let mut crux = McpChild::spawn(&crux_bin, &["--mcp"])?;
+
+    // The LML compiler child is optional. Most projects don't use LML; if its
+    // binary can't be located, degrade to crux-only instead of crashing the
+    // whole router. lml_* tools are then omitted from tools/list and report a
+    // "not available" error if called directly; everything else works.
+    eprintln!("[crux-router] Starting LML child: {} --mcp", lml_bin);
+    let mut lml: Option<McpChild> = match McpChild::spawn(&lml_bin, &["--mcp"]) {
+        Ok(child) => Some(child),
+        Err(e) => {
+            eprintln!(
+                "[crux-router] LML child unavailable ({}); continuing crux-only. \
+                 Set LML_BIN to a built `lml` binary to enable lml_* tools.",
+                e
+            );
+            None
+        }
+    };
 
     let stdin = io::stdin();
     let mut stdout = io::stdout();
@@ -2474,11 +2493,15 @@ fn run_router(policy_router_mode: bool) -> Result<(), String> {
 
         let response = match method.as_deref() {
             Some("initialize") => {
-                // Forward to both, merge responses
-                lml.send(trimmed)?;
+                // Forward to both (lml only if present), merge responses
                 crux.send(trimmed)?;
-                let lml_resp = lml.recv()?;
                 let crux_resp = crux.recv()?;
+                let lml_resp = if let Some(ref mut l) = lml {
+                    l.send(trimmed)?;
+                    l.recv()?
+                } else {
+                    String::new()
+                };
                 let merged = merge_initialize_responses(&lml_resp, &crux_resp, &project_summary);
                 format!(
                     "{{\"jsonrpc\":\"2.0\",\"id\":{},\"result\":{}}}",
@@ -2488,7 +2511,9 @@ fn run_router(policy_router_mode: bool) -> Result<(), String> {
 
             Some("notifications/initialized") => {
                 // Forward to both, no response
-                let _ = lml.send(trimmed);
+                if let Some(ref mut l) = lml {
+                    let _ = l.send(trimmed);
+                }
                 let _ = crux.send(trimmed);
                 continue;
             }
@@ -2498,10 +2523,14 @@ fn run_router(policy_router_mode: bool) -> Result<(), String> {
             }
 
             Some("tools/list") => {
-                lml.send(trimmed)?;
                 crux.send(trimmed)?;
-                let lml_resp = lml.recv()?;
                 let crux_resp = crux.recv()?;
+                let lml_resp = if let Some(ref mut l) = lml {
+                    l.send(trimmed)?;
+                    l.recv()?
+                } else {
+                    String::new()
+                };
                 // Also query each dynamic child whose required_clearance <= caller's clearance
                 let caller = caller_clearance();
                 let mut extra_tools: Vec<String> = Vec::new();
@@ -2712,8 +2741,16 @@ fn run_router(policy_router_mode: bool) -> Result<(), String> {
                     // Standard routing (lml / crux / router)
                     match route_tool(&tool_name) {
                         Some(Route::Lml) => {
-                            lml.send(trimmed)?;
-                            lml.recv()?
+                            if let Some(ref mut l) = lml {
+                                l.send(trimmed)?;
+                                l.recv()?
+                            } else {
+                                json_rpc_error(
+                                    &id,
+                                    -32601,
+                                    "LML compiler not available: set LML_BIN to a built `lml` binary to enable lml_* tools",
+                                )
+                            }
                         }
                         Some(Route::CruxMesh) => {
                             crux.send(trimmed)?;
@@ -2737,10 +2774,14 @@ fn run_router(policy_router_mode: bool) -> Result<(), String> {
             }
 
             Some("resources/list") => {
-                lml.send(trimmed)?;
                 crux.send(trimmed)?;
-                let lml_resp = lml.recv()?;
                 let crux_resp = crux.recv()?;
+                let lml_resp = if let Some(ref mut l) = lml {
+                    l.send(trimmed)?;
+                    l.recv()?
+                } else {
+                    String::new()
+                };
                 let merged = merge_resources_lists(&lml_resp, &crux_resp);
                 format!(
                     "{{\"jsonrpc\":\"2.0\",\"id\":{},\"result\":{}}}",
@@ -2752,8 +2793,16 @@ fn run_router(policy_router_mode: bool) -> Result<(), String> {
                 let uri = extract_uri(trimmed);
                 match route_uri(&uri) {
                     Some(Route::Lml) => {
-                        lml.send(trimmed)?;
-                        lml.recv()?
+                        if let Some(ref mut l) = lml {
+                            l.send(trimmed)?;
+                            l.recv()?
+                        } else {
+                            json_rpc_error(
+                                &id,
+                                -32601,
+                                &format!("LML compiler not available for resource: {}", uri),
+                            )
+                        }
                     }
                     Some(Route::CruxMesh) => {
                         crux.send(trimmed)?;
@@ -2768,7 +2817,9 @@ fn run_router(policy_router_mode: bool) -> Result<(), String> {
             }
 
             Some(m) if m.starts_with("notifications/") => {
-                let _ = lml.send(trimmed);
+                if let Some(ref mut l) = lml {
+                    let _ = l.send(trimmed);
+                }
                 let _ = crux.send(trimmed);
                 continue;
             }

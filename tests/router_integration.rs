@@ -370,3 +370,84 @@ fn test_refresh_capability_manifest_populates_cache() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ===========================================================================
+// Graceful degradation: router boots crux-only when the LML binary is absent
+// ===========================================================================
+
+/// Regression test for the "router fatally crashes without an lml binary" bug.
+///
+/// Spawns the real `crux-router` with `LML_BIN` pointed at a path that does not
+/// exist. The router must NOT exit; it must answer `initialize` and serve the
+/// crux/mesh tools (plus router-local `project`), while omitting `lml_*` tools.
+#[test]
+fn test_router_boots_without_lml_binary() {
+    use std::io::{BufRead, BufReader, Write};
+
+    // A path that cannot resolve to a binary, so the LML child fails to spawn.
+    let bogus_lml = std::env::temp_dir().join("definitely-not-a-real-lml-binary-xyz");
+    let _ = std::fs::remove_file(&bogus_lml);
+
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_crux-router"))
+        .env("LML_BIN", &bogus_lml)
+        // Pin the crux child to the binary built for this test run rather than
+        // relying on `crux` being on PATH in CI.
+        .env("CRUX_BIN", env!("CARGO_BIN_EXE_crux"))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("failed to spawn crux-router");
+
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+
+    // initialize — the router must respond rather than crash on the missing lml.
+    writeln!(
+        stdin,
+        r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{}}}}"#
+    )
+    .unwrap();
+    stdin.flush().unwrap();
+
+    let mut init_line = String::new();
+    let n = stdout.read_line(&mut init_line).expect("read initialize response");
+    assert!(n > 0, "router exited without answering initialize (crashed on missing lml)");
+    assert!(init_line.contains("\"result\""), "initialize was not a success result: {init_line}");
+    assert!(init_line.contains("crux-router"), "initialize missing router serverInfo: {init_line}");
+
+    // tools/list — crux/mesh + router-local tools present, no lml_* tools.
+    writeln!(
+        stdin,
+        r#"{{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{{}}}}"#
+    )
+    .unwrap();
+    stdin.flush().unwrap();
+
+    let mut tools_line = String::new();
+    let n = stdout.read_line(&mut tools_line).expect("read tools/list response");
+    assert!(n > 0, "router exited before answering tools/list");
+    assert!(tools_line.contains("\"name\":\"mesh\""), "tools/list missing crux/mesh tools: {tools_line}");
+    assert!(tools_line.contains("\"project\""), "tools/list missing router-local project tool: {tools_line}");
+    assert!(
+        !tools_line.contains("lml_check"),
+        "lml_* tools should be omitted when lml is unavailable: {tools_line}"
+    );
+
+    // Calling an lml tool directly returns a clean error, not a crash.
+    writeln!(
+        stdin,
+        r#"{{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{{"name":"lml_check","arguments":{{}}}}}}"#
+    )
+    .unwrap();
+    stdin.flush().unwrap();
+
+    let mut err_line = String::new();
+    let n = stdout.read_line(&mut err_line).expect("read lml tool-call response");
+    assert!(n > 0, "router exited when an lml tool was called");
+    assert!(err_line.contains("\"error\""), "expected JSON-RPC error for lml call: {err_line}");
+    assert!(err_line.contains("LML compiler not available"), "expected not-available message: {err_line}");
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
