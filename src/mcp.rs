@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use crate::adapters::{AdapterConfig, CruxAdapter};
 use crate::adapters::scanner::{GroupingStrategy, scan_directory, generate_dir};
 use crate::audit::{AuditLog, AuditEvent, AuditEventKind};
-use crate::json::{extract_string_value, extract_string_array, json_escape, extract_json_objects_from_array};
+use crate::json::{extract_bool_value, extract_string_value, extract_string_array, json_escape, extract_json_objects_from_array};
 use crate::mesh;
 use crate::schema;
 
@@ -424,6 +424,24 @@ fn resolve_working_dir() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
+/// Refuse to create a crux over an existing one unless `force`.
+///
+/// `save_crux_db` is an unconditional write and creation always targets the
+/// working directory, so calling create where a crux already lives silently
+/// discarded every node and edge in it. `mesh::init_mesh` has always guarded
+/// its manifest this way; the CLI's `crux create` carries the same guard.
+fn check_create_conflict(dir: &std::path::Path, force: bool) -> Result<(), String> {
+    let existing = dir.join(".crux.json");
+    if existing.exists() && !force {
+        return Err(format!(
+            "Crux already exists at {}. Overwriting discards all of its nodes and edges; \
+             pass force=true to replace it.",
+            existing.display()
+        ));
+    }
+    Ok(())
+}
+
 fn tool_crux_create(args: &str) -> Result<String, String> {
     let name = extract_string_value(args, "name")
         .ok_or_else(|| "Missing required parameter: name".to_string())?;
@@ -433,6 +451,7 @@ fn tool_crux_create(args: &str) -> Result<String, String> {
     let kind = schema::CruxKind::from_str(&kind_str);
     let db = schema::create_crux_db(&name, kind, &origin);
     let cwd = resolve_working_dir();
+    check_create_conflict(&cwd, extract_bool_value(args, "force").unwrap_or(false))?;
     schema::save_crux_db(&db, &cwd)?;
 
     Ok(format!(
@@ -3356,6 +3375,31 @@ mod tests {
         // Action enum descriptions should mention legacy actions
         assert!(resp.contains("create"), "crux tool should list create action");
         assert!(resp.contains("init"),   "mesh tool should list init action");
+    }
+
+    #[test]
+    fn test_create_conflict_guard() {
+        let dir = std::env::temp_dir().join("crux_mcp_test_create_conflict");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Empty directory: nothing to clobber.
+        assert!(check_create_conflict(&dir, false).is_ok());
+
+        let db = schema::create_crux_db("keeper", schema::CruxKind::Codebase, "manual");
+        schema::save_crux_db(&db, &dir).unwrap();
+
+        let err = check_create_conflict(&dir, false).unwrap_err();
+        assert!(err.contains("already exists"), "got: {}", err);
+        assert!(err.contains("force=true"), "error should name the escape hatch: {}", err);
+
+        // force=true is the deliberate override.
+        assert!(check_create_conflict(&dir, true).is_ok());
+
+        // The guard must not have touched the existing crux.
+        assert_eq!(schema::load_crux_db(&dir).unwrap().header.crux_name, "keeper");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
