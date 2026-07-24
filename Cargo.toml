@@ -1,6 +1,6 @@
 [package]
 name = "crux-mesh"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 description = "Distributed knowledge graph mesh for LLM agents"
 license = "MIT"
