@@ -259,7 +259,7 @@ pub fn serialize_mesh(manifest: &MeshManifest) -> String {
         let _ = writeln!(out, "      \"cluster\": {},", json_opt_str(&m.cluster));
         let _ = writeln!(
             out,
-            "      \"mesh_public_key\": {}",
+            "      \"mesh_public_key\": {},",
             json_escape(&bytes_to_hex(&m.mesh_public_key))
         );
         let _ = writeln!(
@@ -2390,6 +2390,133 @@ mod tests {
         assert_eq!(parsed.cross_edges[0].edge_count, 42);
         assert_eq!(parsed.security.default_classification, "internal");
         assert_eq!(parsed.security.levels.len(), 4);
+    }
+
+    /// Serialized manifests must be valid JSON to *external* consumers, not just
+    /// to our own extractors.
+    ///
+    /// `test_serialize_parse_roundtrip` above reads output back through
+    /// `parse_mesh`, which scans for keys and ignores structure — so it happily
+    /// accepted a manifest that was missing the comma between `mesh_public_key`
+    /// and `mesh_private_key`, and every manifest crux wrote was unparseable by
+    /// jq/json.tool. This test asserts strict validity and compares every member
+    /// field after the round-trip, with two members so separator bugs between
+    /// array elements are covered too.
+    #[test]
+    fn test_serialize_mesh_is_strictly_valid_json() {
+        let mut manifest = create_mesh("strict-test");
+        // Throwaway key bytes — never use a real mesh_private_key in a fixture.
+        manifest.members.push(MeshMember {
+            crux_id: "sha256:abc123".to_string(),
+            crux_name: "backend".to_string(),
+            crux_kind: CruxKind::Codebase,
+            path: "./backend/.crux.json".to_string(),
+            socket: Some("tcp://localhost:9701".to_string()),
+            status: "online".to_string(),
+            last_seen: 1741000100,
+            replica_group: Some("A".to_string()),
+            cluster: Some("secure".to_string()),
+            mesh_public_key: vec![0xf4, 0x7d, 0x2e, 0x81],
+            mesh_private_key: vec![0x9b, 0x85, 0xc9, 0xf8],
+        });
+        manifest.members.push(MeshMember {
+            crux_id: "sha256:def456".to_string(),
+            // Quotes and a backslash: the escaper must survive strict validation.
+            crux_name: "front \"end\"\\ops".to_string(),
+            crux_kind: CruxKind::Policy,
+            path: "./frontend/.crux.json".to_string(),
+            socket: None,
+            status: "offline".to_string(),
+            last_seen: 1741000200,
+            replica_group: None,
+            cluster: None,
+            mesh_public_key: vec![0x11, 0x22],
+            mesh_private_key: vec![0x33, 0x44],
+        });
+        manifest.cross_edges.push(CrossEdgeRef {
+            src_crux: "sha256:abc123".to_string(),
+            dst_crux: "sha256:def456".to_string(),
+            edge_count: 42,
+            last_synced: 1741000100,
+        });
+
+        let json = serialize_mesh(&manifest);
+        crate::json::validate_json(&json)
+            .unwrap_or_else(|e| panic!("serialize_mesh emitted invalid JSON: {}\n{}", e, json));
+
+        let parsed = parse_mesh(&json).unwrap();
+        assert_eq!(parsed.mesh_id, manifest.mesh_id);
+        assert_eq!(parsed.mesh_name, manifest.mesh_name);
+        assert_eq!(parsed.mesh_version, manifest.mesh_version);
+        assert_eq!(parsed.created_at, manifest.created_at);
+        assert_eq!(parsed.members.len(), manifest.members.len());
+        for (got, want) in parsed.members.iter().zip(manifest.members.iter()) {
+            assert_eq!(got.crux_id, want.crux_id);
+            assert_eq!(got.crux_name, want.crux_name);
+            assert_eq!(got.crux_kind, want.crux_kind);
+            assert_eq!(got.path, want.path);
+            assert_eq!(got.socket, want.socket);
+            assert_eq!(got.status, want.status);
+            assert_eq!(got.last_seen, want.last_seen);
+            assert_eq!(got.replica_group, want.replica_group);
+            assert_eq!(got.cluster, want.cluster);
+            assert_eq!(got.mesh_public_key, want.mesh_public_key);
+            assert_eq!(got.mesh_private_key, want.mesh_private_key);
+        }
+        assert_eq!(parsed.cross_edges.len(), 1);
+        assert_eq!(parsed.cross_edges[0].src_crux, "sha256:abc123");
+        assert_eq!(parsed.cross_edges[0].edge_count, 42);
+        assert_eq!(parsed.security.levels, manifest.security.levels);
+
+        // Re-serializing the parsed manifest must be stable and still strict.
+        let json2 = serialize_mesh(&parsed);
+        crate::json::validate_json(&json2).expect("re-serialized manifest invalid");
+        assert_eq!(json, json2);
+    }
+
+    /// Manifests written before the missing-comma fix must still load: the
+    /// tolerant reader is the migration path, so no on-disk mesh breaks.
+    #[test]
+    fn test_parse_legacy_manifest_missing_comma() {
+        let legacy = r#"{
+  "mesh_version": 1,
+  "mesh_id": "sha256:legacy",
+  "mesh_name": "legacy",
+  "created_at": 1741000000,
+  "members": [
+    {
+      "crux_id": "sha256:abc123",
+      "crux_name": "backend",
+      "crux_kind": "codebase",
+      "path": "./backend/.crux.json",
+      "socket": null,
+      "status": "online",
+      "last_seen": 1741000100,
+      "replica_group": null,
+      "cluster": null,
+      "mesh_public_key": "f47d2e81"
+      "mesh_private_key": "9b85c9f8"
+    }
+  ],
+  "cross_edges": [
+  ],
+  "security": {
+    "default_classification": "internal",
+    "levels": ["public", "internal", "confidential", "restricted"]
+  }
+}
+"#;
+        // Precondition: this fixture really is the malformed shape.
+        assert!(crate::json::validate_json(legacy).is_err());
+
+        let parsed = parse_mesh(legacy).unwrap();
+        assert_eq!(parsed.members.len(), 1);
+        assert_eq!(parsed.members[0].crux_name, "backend");
+        assert_eq!(parsed.members[0].mesh_public_key, vec![0xf4, 0x7d, 0x2e, 0x81]);
+        assert_eq!(parsed.members[0].mesh_private_key, vec![0x9b, 0x85, 0xc9, 0xf8]);
+
+        // Rewriting a legacy manifest heals it.
+        crate::json::validate_json(&serialize_mesh(&parsed)).expect("rewrite should be strict");
     }
 
     #[test]

@@ -278,12 +278,243 @@ pub fn extract_string_array(text: &str, key: &str) -> Vec<String> {
 }
 
 // ===========================================================================
+// Validation
+// ===========================================================================
+
+/// Validate that `text` is a single well-formed JSON document, strictly.
+///
+/// The extractors above are deliberately lenient — they scan for keys and never
+/// check structure, so a manifest with a missing separator still loads. That
+/// leniency is what let a writer bug (a dropped comma between two member fields)
+/// survive unnoticed: every round-trip test read the output back through our own
+/// tolerant reader, which cannot see the defect. This is the strict counterpart:
+/// it accepts only what a conforming external parser (`jq`, `json.tool`, an
+/// editor's JSON mode) would accept, so serializer tests can assert that our
+/// output is portable, not merely self-readable.
+///
+/// Returns `Err` with a byte offset and reason on the first violation.
+pub fn validate_json(text: &str) -> Result<(), String> {
+    let b = text.as_bytes();
+    let mut i = skip_ws(b, 0);
+    i = validate_value(b, i)?;
+    i = skip_ws(b, i);
+    if i != b.len() {
+        return Err(format!("trailing content at byte {}", i));
+    }
+    Ok(())
+}
+
+fn skip_ws(b: &[u8], mut i: usize) -> usize {
+    while i < b.len() && matches!(b[i], b' ' | b'\t' | b'\n' | b'\r') {
+        i += 1;
+    }
+    i
+}
+
+/// Validate one JSON value starting at `i`; returns the index just past it.
+fn validate_value(b: &[u8], i: usize) -> Result<usize, String> {
+    if i >= b.len() {
+        return Err("unexpected end of input".to_string());
+    }
+    match b[i] {
+        b'{' => validate_object(b, i),
+        b'[' => validate_array(b, i),
+        b'"' => validate_string(b, i),
+        b't' => expect_literal(b, i, "true"),
+        b'f' => expect_literal(b, i, "false"),
+        b'n' => expect_literal(b, i, "null"),
+        b'-' | b'0'..=b'9' => validate_number(b, i),
+        c => Err(format!(
+            "unexpected character '{}' at byte {}",
+            c as char, i
+        )),
+    }
+}
+
+fn expect_literal(b: &[u8], i: usize, lit: &str) -> Result<usize, String> {
+    let end = i + lit.len();
+    if end <= b.len() && &b[i..end] == lit.as_bytes() {
+        Ok(end)
+    } else {
+        Err(format!("expected `{}` at byte {}", lit, i))
+    }
+}
+
+fn validate_object(b: &[u8], i: usize) -> Result<usize, String> {
+    let mut i = skip_ws(b, i + 1);
+    if i < b.len() && b[i] == b'}' {
+        return Ok(i + 1);
+    }
+    loop {
+        if i >= b.len() || b[i] != b'"' {
+            return Err(format!("expected object key at byte {}", i));
+        }
+        i = validate_string(b, i)?;
+        i = skip_ws(b, i);
+        if i >= b.len() || b[i] != b':' {
+            return Err(format!("expected ':' after object key at byte {}", i));
+        }
+        i = skip_ws(b, i + 1);
+        i = validate_value(b, i)?;
+        i = skip_ws(b, i);
+        match b.get(i) {
+            Some(b',') => i = skip_ws(b, i + 1),
+            Some(b'}') => return Ok(i + 1),
+            // The exact shape of the mesh-manifest bug: two well-formed members
+            // of an object with no separator between them.
+            _ => return Err(format!("expected ',' or '}}' at byte {}", i)),
+        }
+    }
+}
+
+fn validate_array(b: &[u8], i: usize) -> Result<usize, String> {
+    let mut i = skip_ws(b, i + 1);
+    if i < b.len() && b[i] == b']' {
+        return Ok(i + 1);
+    }
+    loop {
+        i = validate_value(b, i)?;
+        i = skip_ws(b, i);
+        match b.get(i) {
+            Some(b',') => i = skip_ws(b, i + 1),
+            Some(b']') => return Ok(i + 1),
+            _ => return Err(format!("expected ',' or ']' at byte {}", i)),
+        }
+    }
+}
+
+fn validate_string(b: &[u8], i: usize) -> Result<usize, String> {
+    let mut i = i + 1;
+    while i < b.len() {
+        match b[i] {
+            b'"' => return Ok(i + 1),
+            b'\\' => {
+                let esc = *b.get(i + 1).ok_or("unterminated escape")?;
+                match esc {
+                    b'"' | b'\\' | b'/' | b'b' | b'f' | b'n' | b'r' | b't' => i += 2,
+                    b'u' => {
+                        if i + 6 > b.len() || !b[i + 2..i + 6].iter().all(u8::is_ascii_hexdigit) {
+                            return Err(format!("bad \\u escape at byte {}", i));
+                        }
+                        i += 6;
+                    }
+                    c => {
+                        return Err(format!("invalid escape '\\{}' at byte {}", c as char, i));
+                    }
+                }
+            }
+            c if c < 0x20 => {
+                return Err(format!("raw control byte 0x{:02x} in string at {}", c, i));
+            }
+            _ => i += 1,
+        }
+    }
+    Err("unterminated string".to_string())
+}
+
+fn validate_number(b: &[u8], i: usize) -> Result<usize, String> {
+    let start = i;
+    let mut i = i;
+    if b[i] == b'-' {
+        i += 1;
+    }
+    // Integer part: `0` alone, or a nonzero digit followed by any digits.
+    match b.get(i) {
+        Some(b'0') => i += 1,
+        Some(c) if c.is_ascii_digit() => {
+            while i < b.len() && b[i].is_ascii_digit() {
+                i += 1;
+            }
+        }
+        _ => return Err(format!("malformed number at byte {}", start)),
+    }
+    if b.get(i) == Some(&b'.') {
+        i += 1;
+        let frac = i;
+        while i < b.len() && b[i].is_ascii_digit() {
+            i += 1;
+        }
+        if i == frac {
+            return Err(format!("missing fraction digits at byte {}", i));
+        }
+    }
+    if matches!(b.get(i), Some(b'e') | Some(b'E')) {
+        i += 1;
+        if matches!(b.get(i), Some(b'+') | Some(b'-')) {
+            i += 1;
+        }
+        let exp = i;
+        while i < b.len() && b[i].is_ascii_digit() {
+            i += 1;
+        }
+        if i == exp {
+            return Err(format!("missing exponent digits at byte {}", i));
+        }
+    }
+    Ok(i)
+}
+
+// ===========================================================================
 // Tests
 // ===========================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_validate_json_accepts_well_formed() {
+        for ok in [
+            "{}",
+            "[]",
+            "null",
+            "-12.5e+3",
+            "0",
+            r#"{"a": [1, 2, {"b": "c\"d\\eÿ"}], "n": null, "t": true}"#,
+            "  {\n  \"a\" : 1 ,\n \"b\": [ ]\n }  \n",
+        ] {
+            assert!(validate_json(ok).is_ok(), "should accept: {}", ok);
+        }
+    }
+
+    #[test]
+    fn test_validate_json_rejects_missing_comma() {
+        // The exact defect that shipped in every .crux-mesh.json: two adjacent
+        // members of an object with no separator between them.
+        let bad = r#"{"mesh_public_key": "f47d" "mesh_private_key": "9b85"}"#;
+        assert!(validate_json(bad).is_err());
+    }
+
+    #[test]
+    fn test_validate_json_rejects_malformed() {
+        for bad in [
+            "",
+            "{",
+            "[1, 2",
+            "[1 2]",
+            "{\"a\": }",
+            "{\"a\" 1}",
+            "{a: 1}",
+            "{\"a\": 1,}",
+            "[1,]",
+            "01",
+            "1.",
+            "1e",
+            "\"unterminated",
+            "\"bad \\q escape\"",
+            "{} extra",
+            "tru",
+        ] {
+            assert!(validate_json(bad).is_err(), "should reject: {:?}", bad);
+        }
+    }
+
+    #[test]
+    fn test_validate_json_accepts_escaped_output() {
+        // Anything json_escape produces must survive strict validation.
+        let s = json_escape("quote\" back\\slash \n\t control\u{1}");
+        assert!(validate_json(&format!("{{\"k\": {}}}", s)).is_ok());
+    }
 
     #[test]
     fn test_json_escape_simple() {
