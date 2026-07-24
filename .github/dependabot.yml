@@ -1,0 +1,17 @@
+version: 2
+
+# Without this, action versions only get revisited when something breaks — the
+# Node.js 20 deprecation warning sat in every release run until someone read the
+# annotations. Dependabot opens a PR when a new major lands instead.
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      # One PR for the routine bumps; majors stay separate so a breaking change
+      # (e.g. upload-pages-artifact v4 dropping dotfiles) gets read on its own.
+      actions-minor:
+        update-types: [minor, patch]
+    commit-message:
+      prefix: ci
