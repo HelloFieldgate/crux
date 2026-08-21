@@ -340,6 +340,97 @@ pub fn generate_crux_id(name: &str, created_at: u64) -> String {
     format!("sha256:{}", sha256_hex(input.as_bytes()))
 }
 
+/// Prefix marking a `content_hash` that this codebase computed and can therefore
+/// re-derive and check.
+///
+/// Everything written before this existed stored something else under the same
+/// field name — `sha256(name)` from `crux_add_node`, `sha256(whole document)`
+/// from the markdown and plaintext adapters, `sha256(relative path)` from the
+/// scanner, an opaque digest from LML, and in Helm's case a hex *timestamp*.
+/// None of those can be recomputed from the node, so none of them can prove
+/// anything about its contents. Tagging our own hashes distinctly is what lets
+/// `verify` tell "this payload changed" apart from "this predates the check" —
+/// without it, a tampered node and an adapter node look identical.
+pub const CRUX_HASH_PREFIX: &str = "cruxv1:";
+
+/// Hash a node's *authored* payload: name, kind, module, summary and tags.
+///
+/// Fields are length-prefixed so no two distinct nodes can collide by shifting a
+/// delimiter across a boundary (`name="a:b", summary="c"` must not hash the same
+/// as `name="a", summary="b:c"`).
+///
+/// Deliberately excluded, because each is written by machinery rather than by the
+/// author and would invalidate the hash on every run:
+///   - `properties` — `crux enrich` appends `file=...` entries
+///   - `reach`, `warnings` — computed by enrichment
+///   - `planning` — `updated_at` is stamped on every edit
+///   - `security`, `node_id`, `created_at`, `deleted_at` — not payload
+///
+/// The hash is set when a node is *authored* (`add_node`, `update_node`) and is
+/// never recomputed by a mechanical load-and-save. That is the whole point: a
+/// read path that quietly mangles a summary — which is exactly what the JSON
+/// escape decoder did for months — then writes it back out will no longer match,
+/// and `verify` will say so.
+pub fn node_content_hash(node: &CruxNode) -> String {
+    fn field(buf: &mut String, s: &str) {
+        let _ = write!(buf, "|{}:{}", s.len(), s);
+    }
+    let mut buf = String::from("cruxnode/v1");
+    field(&mut buf, &node.name);
+    field(&mut buf, &node.kind);
+    field(&mut buf, &node.module);
+    field(&mut buf, &node.summary);
+    let _ = write!(buf, "|{}", node.tags.len());
+    for t in &node.tags {
+        field(&mut buf, t);
+    }
+    format!("{}{}", CRUX_HASH_PREFIX, sha256_hex(buf.as_bytes()))
+}
+
+/// What a stored `content_hash` is actually able to tell us about a node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HashStatus {
+    /// Re-derived and matched — the authored payload is intact.
+    Verified,
+    /// Re-derived and did NOT match — the payload changed after it was authored.
+    /// This is the only genuine tamper/corruption signal.
+    Mismatch,
+    /// Not one of ours: a legacy `sha256(name)`, an adapter-supplied digest, or a
+    /// Helm timestamp. Shape can be checked; contents cannot.
+    Unverifiable,
+    /// Malformed — present but not a recognisable hash of any provenance.
+    Malformed,
+    /// No hash stored at all.
+    Absent,
+}
+
+/// Classify a node's stored `content_hash`. See [`HashStatus`].
+pub fn check_node_hash(node: &CruxNode) -> HashStatus {
+    let h = node.content_hash.trim();
+    if h.is_empty() || h == "sha256:" || h == CRUX_HASH_PREFIX {
+        return HashStatus::Absent;
+    }
+    if let Some(hex) = h.strip_prefix(CRUX_HASH_PREFIX) {
+        if hex.len() != 64 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return HashStatus::Malformed;
+        }
+        return if h == node_content_hash(node) {
+            HashStatus::Verified
+        } else {
+            HashStatus::Mismatch
+        };
+    }
+    // Pre-existing provenances. A bare 64-hex digest, with or without the
+    // `sha256:` prefix, is a hash we simply cannot re-derive; Helm's short hex
+    // timestamps land here too. Anything else is not a hash at all.
+    let body = h.strip_prefix("sha256:").unwrap_or(h);
+    if !body.is_empty() && body.bytes().all(|b| b.is_ascii_hexdigit()) {
+        HashStatus::Unverifiable
+    } else {
+        HashStatus::Malformed
+    }
+}
+
 /// Generate a node ID from the node name and its content hash.
 pub fn generate_node_id(name: &str, content_hash: &str) -> String {
     let input = format!("node:{}:{}", name, content_hash);
@@ -1396,6 +1487,123 @@ pub fn parse_all_mcp_server_registrations(db: &CruxDb) -> Vec<McpServerRegistrat
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // -----------------------------------------------------------------
+    // content_hash / verify
+    // -----------------------------------------------------------------
+
+    fn hash_test_node(name: &str, summary: &str, tags: &[&str]) -> CruxNode {
+        let mut n = CruxNode {
+            node_id: String::new(),
+            name: name.to_string(),
+            kind: "note".to_string(),
+            module: String::new(),
+            summary: summary.to_string(),
+            schema: NodeSchema::empty(),
+            tags: tags.iter().map(|t| t.to_string()).collect(),
+            reach: Vec::new(),
+            properties: Vec::new(),
+            warnings: Vec::new(),
+            planning: PlanningMetadata::empty(),
+            security: SecurityMetadata { classification: "internal".to_string(), redact_below: None },
+            content_hash: String::new(),
+            deleted_at: None,
+        };
+        n.content_hash = node_content_hash(&n);
+        n
+    }
+
+    #[test]
+    fn test_node_content_hash_is_stable_and_tagged() {
+        let n = hash_test_node("a", "s", &["t"]);
+        assert_eq!(node_content_hash(&n), node_content_hash(&n));
+        assert!(n.content_hash.starts_with(CRUX_HASH_PREFIX));
+        assert_eq!(n.content_hash.len(), CRUX_HASH_PREFIX.len() + 64);
+    }
+
+    #[test]
+    fn test_node_content_hash_covers_every_authored_field() {
+        let base = hash_test_node("a", "s", &["t"]);
+        let mut v = base.clone(); v.name = "b".into();
+        assert_ne!(node_content_hash(&v), base.content_hash, "name");
+        let mut v = base.clone(); v.kind = "other".into();
+        assert_ne!(node_content_hash(&v), base.content_hash, "kind");
+        let mut v = base.clone(); v.module = "m".into();
+        assert_ne!(node_content_hash(&v), base.content_hash, "module");
+        let mut v = base.clone(); v.summary = "s2".into();
+        assert_ne!(node_content_hash(&v), base.content_hash, "summary");
+        let mut v = base.clone(); v.tags = vec!["t".into(), "u".into()];
+        assert_ne!(node_content_hash(&v), base.content_hash, "tags");
+        let mut v = base.clone(); v.tags = vec!["u".into(), "t".into()];
+        assert_ne!(node_content_hash(&v), base.content_hash, "tag order");
+    }
+
+    #[test]
+    fn test_node_content_hash_length_prefix_prevents_field_shifting() {
+        // "a:b" + "c" must not hash the same as "a" + "b:c".
+        let x = hash_test_node("a:b", "c", &[]);
+        let y = hash_test_node("a", "b:c", &[]);
+        assert_ne!(x.content_hash, y.content_hash);
+        // Same across the tag boundary.
+        let x = hash_test_node("n", "s", &["ab"]);
+        let y = hash_test_node("n", "s", &["a", "b"]);
+        assert_ne!(x.content_hash, y.content_hash);
+    }
+
+    #[test]
+    fn test_check_node_hash_verified() {
+        assert_eq!(check_node_hash(&hash_test_node("a", "s", &["t"])), HashStatus::Verified);
+    }
+
+    /// The reason this check exists: a read path mangles a summary and writes it
+    /// back. Nothing else about the node changed.
+    #[test]
+    fn test_check_node_hash_detects_a_mangled_summary() {
+        let mut n = hash_test_node("node", "an \u{2014} em dash", &["prose"]);
+        n.summary = "an \\u2014 em dash".to_string();   // what the old decoder produced
+        assert_eq!(check_node_hash(&n), HashStatus::Mismatch);
+    }
+
+    #[test]
+    fn test_check_node_hash_legacy_forms_are_unverifiable_not_mismatched() {
+        // Every provenance that predates this check must land in Unverifiable, or
+        // upgrading would report the entire existing mesh as tampered.
+        let mut n = hash_test_node("node", "s", &["t"]);
+        for legacy in [
+            format!("sha256:{}", sha256_hex(b"node")),        // crux_add_node
+            format!("sha256:{}", sha256_hex(b"node:s")),      // crux_update_node
+            sha256_hex(b"whole document"),                    // no prefix (mcp registration)
+            "sha256:68d4f2a1".to_string(),                    // Helm hex timestamp
+        ] {
+            n.content_hash = legacy.clone();
+            assert_eq!(check_node_hash(&n), HashStatus::Unverifiable, "{}", legacy);
+        }
+    }
+
+    #[test]
+    fn test_check_node_hash_absent_and_malformed() {
+        let mut n = hash_test_node("node", "s", &["t"]);
+        for empty in ["", "sha256:", CRUX_HASH_PREFIX] {
+            n.content_hash = empty.to_string();
+            assert_eq!(check_node_hash(&n), HashStatus::Absent, "{:?}", empty);
+        }
+        for bad in ["not-a-hash", "sha256:zzzz", "cruxv1:abc"] {
+            n.content_hash = bad.to_string();
+            assert_eq!(check_node_hash(&n), HashStatus::Malformed, "{}", bad);
+        }
+    }
+
+    /// `crux enrich` appends `file=...` properties and fills `reach`. If those were
+    /// hashed, every enrich run would report the whole crux as tampered.
+    #[test]
+    fn test_machine_written_fields_do_not_invalidate_the_hash() {
+        let mut n = hash_test_node("node", "s", &["t"]);
+        n.properties.push("file=src/lib.rs".to_string());
+        n.reach.push("other-node".to_string());
+        n.warnings.push("unused".to_string());
+        n.planning.updated_at = Some(1_700_000_000);
+        assert_eq!(check_node_hash(&n), HashStatus::Verified);
+    }
 
     fn make_test_db() -> CruxDb {
         let mut db = CruxDb {

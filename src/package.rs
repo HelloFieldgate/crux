@@ -833,14 +833,16 @@ fn verify_package_hashes(db: &schema::CruxDb) -> AuditResult {
         if node.deleted_at.is_some() {
             continue;
         }
-        // Recompute content hash from node name (matches the pattern used in add_node)
-        let expected = format!("sha256:{}", sha256_hex(node.name.as_bytes()));
-        if node.content_hash == expected || node.content_hash.is_empty() {
-            result.verified.push(node.name.clone());
-        } else {
-            // The hash might be computed from source content rather than just the name
-            // In that case, we can't verify without the source — mark as verified
-            result.verified.push(node.name.clone());
+        // Both arms of this used to push to `verified`, which made `tampered`
+        // unreachable and the whole audit a no-op that always came back clean.
+        match crate::schema::check_node_hash(node) {
+            crate::schema::HashStatus::Mismatch | crate::schema::HashStatus::Malformed => {
+                result.tampered.push(node.name.clone());
+            }
+            // Verified, or carrying a hash that predates this check and cannot be
+            // re-derived. The latter is not evidence of integrity — see
+            // schema::check_node_hash — but it is not evidence of tampering either.
+            _ => result.verified.push(node.name.clone()),
         }
     }
 

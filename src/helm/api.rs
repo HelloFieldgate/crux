@@ -11,6 +11,7 @@ use crate::mesh::{load_mesh, MeshManifest};
 use crate::schema::{
     load_crux_db, save_crux_db, serialize_crux_db, CruxEdge, CruxNode, EdgeKind,
     NodeSchema, PlanningMetadata, SecurityMetadata, generate_node_id, generate_edge_id,
+    node_content_hash,
     now_unix,
 };
 
@@ -234,6 +235,10 @@ pub fn handle_update_node(mesh_root: &Path, req: &Request) -> Response {
         node.planning.priority = p_str.parse::<u8>().ok();
     }
 
+    // Authoring edit — re-bless the content hash so `verify` stays meaningful.
+    // node_id is intentionally left alone: it is the caller's handle on this node.
+    node.content_hash = node_content_hash(node);
+
     db.header.last_modified_at = now_unix();
 
     match save_crux_db(&db, &crux_dir) {
@@ -267,10 +272,10 @@ pub fn handle_add_node(mesh_root: &Path, req: &Request) -> Response {
         Err(e) => return Response::server_error(&e),
     };
 
-    let content_hash = format!("sha256:{:x}", now_unix());
-    let node_id = generate_node_id(&name, &content_hash);
+    // Was a hex timestamp, which is not a hash of anything. Build the node first,
+    // hash its real payload, then derive the id from that.
     let node = CruxNode {
-        node_id: node_id.clone(),
+        node_id: String::new(),
         name,
         kind,
         module,
@@ -285,9 +290,13 @@ pub fn handle_add_node(mesh_root: &Path, req: &Request) -> Response {
             classification: "internal".to_string(),
             redact_below: None,
         },
-        content_hash,
+        content_hash: String::new(),
         deleted_at: None,
     };
+    let mut node = node;
+    node.content_hash = node_content_hash(&node);
+    let node_id = generate_node_id(&node.name, &node.content_hash);
+    node.node_id = node_id.clone();
 
     db.nodes.push(node);
     db.header.last_modified_at = now_unix();
@@ -946,10 +955,8 @@ fn seed_from_llm_response(mesh_root: &Path, crux_path: &str, llm_output: &str) -
                     .filter(|s| !s.is_empty())
                     .collect();
 
-                let content_hash = format!("sha256:{:x}", now);
-                let node_id = generate_node_id(&name, &content_hash);
-                db.nodes.push(CruxNode {
-                    node_id,
+                let mut node = CruxNode {
+                    node_id: String::new(),
                     name,
                     kind,
                     module: String::new(),
@@ -964,9 +971,12 @@ fn seed_from_llm_response(mesh_root: &Path, crux_path: &str, llm_output: &str) -
                         classification: "internal".to_string(),
                         redact_below: None,
                     },
-                    content_hash,
+                    content_hash: String::new(),
                     deleted_at: None,
-                });
+                };
+                node.content_hash = node_content_hash(&node);
+                node.node_id = generate_node_id(&node.name, &node.content_hash);
+                db.nodes.push(node);
                 nodes_added += 1;
             }
         }
