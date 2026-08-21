@@ -487,7 +487,8 @@ fn merge_resources_lists(lml_resp: &str, crux_resp: &str) -> String {
 // ---------------------------------------------------------------------------
 
 /// Extract a JSON string value from a flat object text, correctly handling
-/// escape sequences inside the value (e.g. \n, \", \\).
+/// escape sequences inside the value via `crux_mesh::json::decode_escape`,
+/// including `\uXXXX` and surrogate pairs.
 /// Returns the decoded string, or None if the key isn't found.
 fn extract_json_string_value(obj: &str, key: &str) -> Option<String> {
     let needle = format!("\"{}\"", key);
@@ -511,15 +512,11 @@ fn extract_json_string_value(obj: &str, key: &str) -> Option<String> {
             match chars.next() {
                 None       => break,
                 Some('"')  => break,
-                Some('\\') => match chars.next() {
-                    Some('n')  => result.push('\n'),
-                    Some('r')  => result.push('\r'),
-                    Some('t')  => result.push('\t'),
-                    Some('"')  => result.push('"'),
-                    Some('\\') => result.push('\\'),
-                    Some(c)    => { result.push('\\'); result.push(c); }
-                    None       => break,
-                },
+                Some('\\') => {
+                    if !crux_mesh::json::decode_escape(&mut chars, &mut result) {
+                        break;
+                    }
+                }
                 Some(c)    => result.push(c),
             }
         }
@@ -546,11 +543,13 @@ fn extract_json_string_array(obj: &str, key: &str) -> Vec<String> {
                     None       => break,
                     Some('"')  => { consumed += 1; break; }
                     Some('\\') => {
-                        consumed += 1;
-                        match chars.next() {
-                            Some(c) => { consumed += 1; match c { 'n'=>s.push('\n'),'t'=>s.push('\t'),c=>s.push(c) } }
-                            None    => break,
+                        // Measure what the shared decoder consumed so `consumed`
+                        // stays a byte offset into `after_quote`.
+                        let before = chars.clone();
+                        if !crux_mesh::json::decode_escape(&mut chars, &mut s) {
+                            break;
                         }
+                        consumed += 1 + (before.as_str().len() - chars.as_str().len());
                     }
                     Some(c)    => { consumed += c.len_utf8(); s.push(c); }
                 }
@@ -2876,6 +2875,72 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- JSON escape decoding (see crux_mesh::json::decode_escape) ---
+    //
+    // The router carried its own two copies of the escape decoder. Neither
+    // understood \uXXXX: extract_json_string_value pushed the backslash back
+    // into the value, and extract_json_string_array dropped it entirely, so
+    // "\u2014" decoded to the literal text "u2014". Both now delegate.
+
+    #[test]
+    fn test_router_value_decodes_unicode_escape() {
+        let obj = r#"{"summary": "a \u2014 b", "tag": "\ud83d\ude00"}"#;
+        assert_eq!(extract_json_string_value(obj, "summary").unwrap(), "a \u{2014} b");
+        assert_eq!(extract_json_string_value(obj, "tag").unwrap(), "\u{1F600}");
+    }
+
+    #[test]
+    fn test_router_value_decodes_remaining_legal_escapes() {
+        let obj = r#"{"s": "a\bb\fc\/d\te\nf"}"#;
+        assert_eq!(
+            extract_json_string_value(obj, "s").unwrap(),
+            "a\u{8}b\u{c}c/d\te\nf"
+        );
+    }
+
+    #[test]
+    fn test_router_array_decodes_unicode_escape() {
+        // The array decoder used to return ["u2014", "ud83dude00"] here.
+        let obj = r#"{"tags": ["em\u2014dash", "\ud83d\ude00", "a\/b\bc", "plain"]}"#;
+        assert_eq!(
+            extract_json_string_array(obj, "tags"),
+            vec![
+                "em\u{2014}dash".to_string(),
+                "\u{1F600}".to_string(),
+                "a/b\u{8}c".to_string(),
+                "plain".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_router_array_offset_stays_aligned_after_escapes() {
+        // decode_escape consumes a variable number of chars; if the caller's
+        // byte offset drifts, later elements are silently truncated or lost.
+        let obj = r#"{"tags": ["\ud83d\ude00", "\u2014", "\tx", "\\", "last"]}"#;
+        assert_eq!(
+            extract_json_string_array(obj, "tags"),
+            vec![
+                "\u{1F600}".to_string(),
+                "\u{2014}".to_string(),
+                "\tx".to_string(),
+                "\\".to_string(),
+                "last".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_router_round_trip_matches_library_decoder() {
+        // The router and the library must agree; they used to differ from each
+        // other as well as from JSON.
+        let obj = r#"{"s": "\u2014 \ud83d\ude00 \" \\ \n"}"#;
+        assert_eq!(
+            extract_json_string_value(obj, "s").unwrap(),
+            crux_mesh::json::extract_string_value(obj, "s").unwrap()
+        );
+    }
 
     // --- Route tool tests ---
 

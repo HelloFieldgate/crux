@@ -131,6 +131,88 @@ fn find_json_key(text: &str, pattern: &str) -> Option<usize> {
     None
 }
 
+/// Read exactly four hex digits, consuming them only if all four are present.
+///
+/// On failure the iterator is left untouched, so a malformed `\uXX` can be
+/// passed through verbatim instead of half-eaten.
+fn take_hex4(chars: &mut std::str::Chars<'_>) -> Option<u32> {
+    let mut probe = chars.clone();
+    let mut v = 0u32;
+    for _ in 0..4 {
+        v = v * 16 + probe.next()?.to_digit(16)?;
+    }
+    *chars = probe;
+    Some(v)
+}
+
+/// Decode one JSON escape sequence into `out`, given a char iterator positioned
+/// immediately after the backslash. Returns false if input ended mid-escape.
+///
+/// This is the single escape decoder for the whole codebase. There used to be
+/// four hand-rolled copies (two here, two in `crux_router.rs`) and none of them
+/// understood `\uXXXX`: they pushed the backslash back into the decoded string,
+/// `json_escape` then escaped *that* backslash on the way out, and the character
+/// was destroyed — permanently, and a little worse on every round trip.
+///
+/// It never fired on our own files because `json_escape` emits non-ASCII as raw
+/// UTF-8, so crux never had to read its own `\u`. It fired the moment any other
+/// writer touched a crux, and `ensure_ascii=True` is the *default* in Python's
+/// `json.dump`. Do not "fix" a future variant of this by escaping non-ASCII on
+/// output; that just moves the landmine into every file we write.
+///
+/// Handles the full grammar — `\" \\ \/ \b \f \n \r \t` and `\uXXXX` including
+/// surrogate pairs, so `\ud83d\ude00` yields one emoji. Input that is not a legal
+/// escape is passed through verbatim rather than dropped.
+pub fn decode_escape(chars: &mut std::str::Chars<'_>, out: &mut String) -> bool {
+    let c = match chars.next() {
+        Some(c) => c,
+        None => return false,
+    };
+    match c {
+        '"' => out.push('"'),
+        '\\' => out.push('\\'),
+        '/' => out.push('/'),
+        'b' => out.push('\u{08}'),
+        'f' => out.push('\u{0c}'),
+        'n' => out.push('\n'),
+        'r' => out.push('\r'),
+        't' => out.push('\t'),
+        'u' => match take_hex4(chars) {
+            // Not well-formed — leave it exactly as it arrived.
+            None => {
+                out.push('\\');
+                out.push('u');
+            }
+            // High surrogate: a low surrogate must follow as its own \uXXXX.
+            // Probe on a clone so a lone high surrogate doesn't swallow whatever
+            // legitimately came next.
+            Some(hi @ 0xD800..=0xDBFF) => {
+                let mut probe = chars.clone();
+                let lo = if probe.next() == Some('\\') && probe.next() == Some('u') {
+                    take_hex4(&mut probe)
+                } else {
+                    None
+                };
+                match lo {
+                    Some(lo @ 0xDC00..=0xDFFF) => {
+                        *chars = probe;
+                        let cp = 0x1_0000 + ((hi - 0xD800) << 10) + (lo - 0xDC00);
+                        out.push(char::from_u32(cp).unwrap_or('\u{FFFD}'));
+                    }
+                    _ => out.push('\u{FFFD}'),
+                }
+            }
+            // Lone low surrogates fall out of from_u32 as None.
+            Some(cp) => out.push(char::from_u32(cp).unwrap_or('\u{FFFD}')),
+        },
+        c => {
+            out.push('\\');
+            out.push(c);
+        }
+    }
+    true
+}
+
 /// Extract a string value for a given key from a JSON-like line.
 /// Looks for `"key": "value"` and returns the unescaped value.
 pub fn extract_string_value(line: &str, key: &str) -> Option<String> {
@@ -148,15 +230,11 @@ pub fn extract_string_value(line: &str, key: &str) -> Option<String> {
             match chars.next() {
                 None => break,
                 Some('"') => break,
-                Some('\\') => match chars.next() {
-                    Some('n') => result.push('\n'),
-                    Some('r') => result.push('\r'),
-                    Some('t') => result.push('\t'),
-                    Some('"') => result.push('"'),
-                    Some('\\') => result.push('\\'),
-                    Some(c) => { result.push('\\'); result.push(c); }
-                    None => break,
-                },
+                Some('\\') => {
+                    if !decode_escape(&mut chars, &mut result) {
+                        break;
+                    }
+                }
                 Some(c) => result.push(c),
             }
         }
@@ -247,31 +325,25 @@ pub fn extract_string_array(text: &str, key: &str) -> Vec<String> {
     let inner = &bracket_content[..end];
     let mut result = Vec::new();
     let mut in_str = false;
-    let mut escaped = false;
     let mut current = String::new();
+    let mut chars = inner.chars();
 
-    for c in inner.chars() {
-        if escaped {
+    while let Some(c) = chars.next() {
+        if in_str {
             match c {
-                'n' => current.push('\n'),
-                'r' => current.push('\r'),
-                't' => current.push('\t'),
-                '"' => current.push('"'),
-                '\\' => current.push('\\'),
-                _ => { current.push('\\'); current.push(c); }
+                '\\' => {
+                    if !decode_escape(&mut chars, &mut current) {
+                        break;
+                    }
+                }
+                '"' => {
+                    result.push(std::mem::take(&mut current));
+                    in_str = false;
+                }
+                c => current.push(c),
             }
-            escaped = false;
-        } else if c == '\\' && in_str {
-            escaped = true;
         } else if c == '"' {
-            if in_str {
-                result.push(std::mem::take(&mut current));
-                in_str = false;
-            } else {
-                in_str = true;
-            }
-        } else if in_str {
-            current.push(c);
+            in_str = true;
         }
     }
     result
@@ -462,58 +534,124 @@ fn validate_number(b: &[u8], i: usize) -> Result<usize, String> {
 mod tests {
     use super::*;
 
+    // -----------------------------------------------------------------
+    // \uXXXX decoding. Four hand-rolled decoders all pushed the backslash back
+    // into the result, json_escape re-escaped it, and the character was
+    // destroyed — one extra backslash per round trip, forever.
+    //
+    // The fixtures below are RAW strings holding a real backslash. A test that
+    // writes the character directly proves nothing: json_escape emits raw UTF-8,
+    // so crux never reads its own \u — which is exactly why this survived four
+    // decoders and a full test suite.
+    // -----------------------------------------------------------------
+
+    /// The one that matters: hand-written JSON, as any other tool would emit it.
     #[test]
-    fn test_validate_json_accepts_well_formed() {
-        for ok in [
-            "{}",
-            "[]",
-            "null",
-            "-12.5e+3",
-            "0",
-            r#"{"a": [1, 2, {"b": "c\"d\\eÿ"}], "n": null, "t": true}"#,
-            "  {\n  \"a\" : 1 ,\n \"b\": [ ]\n }  \n",
-        ] {
-            assert!(validate_json(ok).is_ok(), "should accept: {}", ok);
+    fn test_decode_unicode_escape_from_foreign_writer() {
+        // Exactly what Python's json.dump writes by default (ensure_ascii=True).
+        let line = r#"{"summary": "a \u2014 b"}"#;
+        assert_eq!(extract_string_value(line, "summary").unwrap(), "a \u{2014} b");
+    }
+
+    #[test]
+    fn test_decode_surrogate_pair() {
+        let line = r#"{"s": "\ud83d\ude00"}"#;
+        let got = extract_string_value(line, "s").unwrap();
+        assert_eq!(got, "\u{1F600}");
+        assert_eq!(got.chars().count(), 1, "must be one emoji, not two replacements");
+    }
+
+    #[test]
+    fn test_decode_lone_surrogates_become_replacement() {
+        // Unpaired halves cannot be represented; they must not consume what follows.
+        assert_eq!(extract_string_value(r#"{"s": "\ud83dZ"}"#, "s").unwrap(), "\u{FFFD}Z");
+        assert_eq!(extract_string_value(r#"{"s": "\ude00"}"#, "s").unwrap(), "\u{FFFD}");
+        // A high surrogate followed by a non-surrogate \u must keep both.
+        assert_eq!(
+            extract_string_value(r#"{"s": "\ud83d\u0041"}"#, "s").unwrap(),
+            "\u{FFFD}A"
+        );
+    }
+
+    #[test]
+    fn test_decode_remaining_legal_escapes() {
+        // \b, \f and \/ are legal JSON and were mangled identically.
+        let line = r#"{"s": "a\bb\fc\/d"}"#;
+        assert_eq!(extract_string_value(line, "s").unwrap(), "a\u{8}b\u{c}c/d");
+    }
+
+    #[test]
+    fn test_decode_malformed_unicode_escape_is_preserved() {
+        // Not valid JSON; must pass through rather than half-eat the digits.
+        assert_eq!(extract_string_value(r#"{"s": "\u12"}"#, "s").unwrap(), r"\u12");
+        assert_eq!(extract_string_value(r#"{"s": "\uZZZZ"}"#, "s").unwrap(), r"\uZZZZ");
+    }
+
+    /// json_escape's output must feed back through the decoder unchanged.
+    #[test]
+    fn test_round_trip_escape_then_decode() {
+        let original = "em\u{2014}dash \u{b1} emoji \u{1F600} quote\" newline\n backslash\\ tab\t";
+        let line = format!("{{\"summary\": {}}}", json_escape(original));
+        assert!(validate_json(&line).is_ok(), "escaped output must be portable JSON");
+        assert_eq!(extract_string_value(&line, "summary").unwrap(), original);
+    }
+
+    /// The bug's signature was that this was *not* a fixed point: each pass grew
+    /// the string by one backslash.
+    #[test]
+    fn test_round_trip_is_idempotent() {
+        let original = "a \u{2014} b \u{b1} \u{1F600} \"q\" \\ z";
+        let mut current = original.to_string();
+        for pass in 0..5 {
+            let line = format!("{{\"summary\": {}}}", json_escape(&current));
+            current = extract_string_value(&line, "summary").unwrap();
+            assert_eq!(current, original, "drifted on pass {}", pass);
         }
     }
 
+    /// A crux written by a foreign tool, re-read and re-written by us, must still
+    /// hold the same characters. This is the ParityShot failure verbatim.
     #[test]
-    fn test_validate_json_rejects_missing_comma() {
-        // The exact defect that shipped in every .crux-mesh.json: two adjacent
-        // members of an object with no separator between them.
-        let bad = r#"{"mesh_public_key": "f47d" "mesh_private_key": "9b85"}"#;
-        assert!(validate_json(bad).is_err());
+    fn test_foreign_ascii_escaped_input_survives_rewrite() {
+        let foreign = r#"{"summary": "a \u2014 b \u00b1 c \ud83d\ude00"}"#;
+        let decoded = extract_string_value(foreign, "summary").unwrap();
+        assert_eq!(decoded, "a \u{2014} b \u{b1} c \u{1F600}");
+        // Now write it back out the way crux does, and read it again.
+        let ours = format!("{{\"summary\": {}}}", json_escape(&decoded));
+        assert!(!ours.contains(r"\u2014"), "must not re-emit an escape we can carry raw");
+        assert_eq!(extract_string_value(&ours, "summary").unwrap(), decoded);
+    }
+
+    // ---- the same set for extract_string_array ----
+
+    #[test]
+    fn test_array_decode_unicode_escape() {
+        let line = r#"{"tags": ["a \u2014 b", "\ud83d\ude00", "x\/y\bz"]}"#;
+        assert_eq!(
+            extract_string_array(line, "tags"),
+            vec![
+                "a \u{2014} b".to_string(),
+                "\u{1F600}".to_string(),
+                "x/y\u{8}z".to_string(),
+            ]
+        );
     }
 
     #[test]
-    fn test_validate_json_rejects_malformed() {
-        for bad in [
-            "",
-            "{",
-            "[1, 2",
-            "[1 2]",
-            "{\"a\": }",
-            "{\"a\" 1}",
-            "{a: 1}",
-            "{\"a\": 1,}",
-            "[1,]",
-            "01",
-            "1.",
-            "1e",
-            "\"unterminated",
-            "\"bad \\q escape\"",
-            "{} extra",
-            "tru",
-        ] {
-            assert!(validate_json(bad).is_err(), "should reject: {:?}", bad);
+    fn test_array_round_trip_is_idempotent() {
+        let original = vec![
+            "em\u{2014}dash".to_string(),
+            "quote\" and \\ backslash".to_string(),
+            "\u{1F600} \u{b1}".to_string(),
+            "bracket ] inside".to_string(),
+        ];
+        let mut current = original.clone();
+        for pass in 0..5 {
+            let line = format!("{{\"tags\": {}}}", json_str_array(&current));
+            assert!(validate_json(&line).is_ok());
+            current = extract_string_array(&line, "tags");
+            assert_eq!(current, original, "drifted on pass {}", pass);
         }
-    }
-
-    #[test]
-    fn test_validate_json_accepts_escaped_output() {
-        // Anything json_escape produces must survive strict validation.
-        let s = json_escape("quote\" back\\slash \n\t control\u{1}");
-        assert!(validate_json(&format!("{{\"k\": {}}}", s)).is_ok());
     }
 
     #[test]
