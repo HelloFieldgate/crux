@@ -26,6 +26,7 @@ local/
 
 # Local dogfood mesh — the Crux Mesh repo's own crux state (not for the public repo)
 /.crux-mesh.json
+/.crux-audit.json
 /policy/
 /code/
 /coms/
