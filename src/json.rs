@@ -87,7 +87,12 @@ pub fn json_opt_u8(val: &Option<u8>) -> String {
 /// and the next non-whitespace character after its closing quote is `':'`. This
 /// also skips occurrences where the key name appears as a *value*
 /// (e.g. `{"action":"query","query":"foo"}`).
-fn find_json_key(text: &str, pattern: &str) -> Option<usize> {
+///
+/// Use this for *anchoring* a section scan too, never a bare
+/// `text.find("\"key\"")`. A raw substring search anchors on the first
+/// key-shaped text anywhere in the document, including inside a tag or summary
+/// belonging to an earlier record — which silently reparses the wrong region.
+pub fn find_json_key(text: &str, pattern: &str) -> Option<usize> {
     // `pattern` is the key wrapped in quotes; compare against the inner name.
     let key = pattern.trim_matches('"');
     let bytes = text.as_bytes();

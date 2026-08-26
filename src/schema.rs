@@ -11,8 +11,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::crypto::sha256_hex;
 use crate::json::{
     extract_bool_value, extract_json_objects_from_array, extract_string_array, extract_string_value,
-    extract_u64_value, is_null_value, json_escape, json_opt_str, json_opt_u64, json_opt_u8,
-    json_str_array,
+    extract_u64_value, find_json_key, is_null_value, json_escape, json_opt_str, json_opt_u64,
+    json_opt_u8, json_str_array,
 };
 
 // ===========================================================================
@@ -776,7 +776,7 @@ pub fn parse_crux_db(text: &str) -> Result<CruxDb, String> {
 /// Parse the "nodes" array from JSON text.
 fn parse_nodes(text: &str) -> Vec<CruxNode> {
     let mut nodes = Vec::new();
-    let nodes_start = match text.find("\"nodes\"") {
+    let nodes_start = match find_json_key(text, "\"nodes\"") {
         Some(i) => i,
         None => return nodes,
     };
@@ -885,7 +885,7 @@ fn parse_schema_slots(obj: &str, key: &str) -> Vec<SchemaSlot> {
 /// Parse the "edges" array from JSON text.
 fn parse_edges(text: &str) -> Vec<CruxEdge> {
     let mut edges = Vec::new();
-    let edges_start = match text.find("\"edges\"") {
+    let edges_start = match find_json_key(text, "\"edges\"") {
         Some(i) => i,
         None => return edges,
     };
@@ -948,7 +948,7 @@ fn extract_weight(obj: &str) -> f64 {
 /// Parse the "modules" array from JSON text.
 fn parse_modules(text: &str) -> Vec<ModuleNode> {
     let mut modules = Vec::new();
-    let start = match text.find("\"modules\"") {
+    let start = match find_json_key(text, "\"modules\"") {
         Some(i) => i,
         None => return modules,
     };
@@ -973,7 +973,7 @@ fn parse_modules(text: &str) -> Vec<ModuleNode> {
 /// Parse the "domains" array from JSON text.
 fn parse_domains(text: &str) -> Vec<DomainNode> {
     let mut domains = Vec::new();
-    let start = match text.find("\"domains\"") {
+    let start = match find_json_key(text, "\"domains\"") {
         Some(i) => i,
         None => return domains,
     };
@@ -996,7 +996,7 @@ fn parse_domains(text: &str) -> Vec<DomainNode> {
 /// Returns empty vec if the field is missing (backward compatible).
 fn parse_mesh_memberships(text: &str) -> Vec<MeshMembership> {
     let mut memberships = Vec::new();
-    let start = match text.find("\"mesh_memberships\"") {
+    let start = match find_json_key(text, "\"mesh_memberships\"") {
         Some(i) => i,
         None => return memberships,
     };
@@ -1820,6 +1820,76 @@ mod tests {
         assert!(db.header.crux_id.starts_with("sha256:"));
         assert!(db.nodes.is_empty());
         assert!(db.edges.is_empty());
+    }
+
+        /// Build a db whose first node carries key-shaped tags and summary text.
+    ///
+    /// Edges are serialized after nodes, so a node tagged "edges" puts the
+    /// literal `"edges"` in the file *before* the real top-level key.
+    fn db_with_key_shaped_values() -> CruxDb {
+        let mut db = make_test_db();
+        db.nodes[0].tags = vec![
+            "edges".to_string(),
+            "nodes".to_string(),
+            "modules".to_string(),
+            "domains".to_string(),
+            "mesh_memberships".to_string(),
+        ];
+        db.nodes[0].summary = r#"a summary mentioning "edges": [] and "nodes": []"#.to_string();
+        db.edges = vec![CruxEdge {
+            edge_id: "sha256:e1".to_string(),
+            src: db.nodes[0].name.clone(),
+            dst: db.nodes[1].name.clone(),
+            kind: EdgeKind::Calls,
+            weight: 1.0,
+            detail: String::new(),
+            cross_crux: false,
+            binding: String::new(),
+            created_at: 1,
+            dangling: false,
+        }];
+        db
+    }
+
+    #[test]
+    fn test_section_anchors_ignore_key_shaped_text_in_values() {
+        // A raw text.find() anchored on the tag, reparsed the tags array as the
+        // edge list, and returned zero edges — which the next save persisted.
+        // Every edge in the graph was destroyed by a load-modify-write.
+        let db = db_with_key_shaped_values();
+        let reparsed = parse_crux_db(&serialize_crux_db(&db)).expect("must reparse");
+
+        assert_eq!(reparsed.nodes.len(), db.nodes.len(), "nodes must survive");
+        assert_eq!(
+            reparsed.edges.len(),
+            1,
+            "edges must survive a node tagged \"edges\""
+        );
+        assert_eq!(reparsed.edges[0].src, db.nodes[0].name);
+        assert_eq!(reparsed.edges[0].dst, db.nodes[1].name);
+        assert_eq!(reparsed.edges[0].kind, EdgeKind::Calls);
+
+        // The other section anchors are equally at risk if serialization order
+        // ever changes, so pin them here rather than relying on key position.
+        assert_eq!(reparsed.modules.len(), db.modules.len(), "modules must survive");
+        assert_eq!(reparsed.domains.len(), db.domains.len(), "domains must survive");
+    }
+
+    #[test]
+    fn test_edges_survive_repeated_load_modify_write() {
+        // The destructive path is not a single bad read — it is the write that
+        // follows one. Loop it, because the loss only shows on the save.
+        let mut text = serialize_crux_db(&db_with_key_shaped_values());
+        for cycle in 0..3 {
+            let round = parse_crux_db(&text).expect("must reparse");
+            assert_eq!(
+                round.edges.len(),
+                1,
+                "edge lost on load-modify-write cycle {}",
+                cycle
+            );
+            text = serialize_crux_db(&round);
+        }
     }
 
     #[test]

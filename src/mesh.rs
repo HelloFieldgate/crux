@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 
 use crate::crypto::sha256_hex;
 use crate::json::{
-    extract_json_objects_from_array, extract_string_value, extract_u64_value, json_escape,
-    json_opt_str,
+    extract_json_objects_from_array, extract_string_value, extract_u64_value, find_json_key,
+    json_escape, json_opt_str,
 };
 use crate::schema::{load_crux_db, now_unix, CruxDb, CruxKind};
 
@@ -336,7 +336,7 @@ pub fn parse_mesh(text: &str) -> Result<MeshManifest, String> {
 /// Parse the "members" array from the mesh JSON.
 fn parse_members(text: &str) -> Vec<MeshMember> {
     let mut members = Vec::new();
-    let start = match text.find("\"members\"") {
+    let start = match find_json_key(text, "\"members\"") {
         Some(i) => i,
         None => return members,
     };
@@ -388,7 +388,7 @@ fn parse_members(text: &str) -> Vec<MeshMember> {
 /// Parse the "cross_edges" array from the mesh JSON.
 fn parse_cross_edges(text: &str) -> Vec<CrossEdgeRef> {
     let mut edges = Vec::new();
-    let start = match text.find("\"cross_edges\"") {
+    let start = match find_json_key(text, "\"cross_edges\"") {
         Some(i) => i,
         None => return edges,
     };
@@ -434,7 +434,7 @@ fn parse_security(text: &str) -> MeshSecurity {
 /// other arrays, so we look for it near "default_classification".
 fn parse_security_levels(text: &str) -> Vec<String> {
     // Find "security" section
-    let sec_start = match text.find("\"security\"") {
+    let sec_start = match find_json_key(text, "\"security\"") {
         Some(i) => i,
         None => {
             return vec![
@@ -448,7 +448,7 @@ fn parse_security_levels(text: &str) -> Vec<String> {
     let sec_text = &text[sec_start..];
 
     // Find "levels" within the security section
-    let levels_start = match sec_text.find("\"levels\"") {
+    let levels_start = match find_json_key(sec_text, "\"levels\"") {
         Some(i) => i,
         None => {
             return vec![
