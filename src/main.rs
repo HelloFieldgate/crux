@@ -22,6 +22,7 @@ fn print_help() {
     eprintln!("  scan <path> [--depth n]               Scan a directory and list all files");
     eprintln!("  generate-dir <source> <output> <mesh> Generate cruxes from a directory");
     eprintln!("  load <path>                           Load and display a crux summary");
+    eprintln!("  verify <path>                       Check node hashes and edge integrity");
     eprintln!("  query <path> <filter>                 Query nodes by tag/name/kind");
     eprintln!();
     eprintln!("Mesh commands:");
@@ -69,6 +70,7 @@ fn main() {
         "scan" => cmd_scan(&args[2..]),
         "generate-dir" => cmd_generate_dir(&args[2..]),
         "load" => cmd_load(&args[2..]),
+        "verify" => cmd_verify(&args[2..]),
         "query" => cmd_query(&args[2..]),
         "mesh" => {
             if args.len() < 3 {
@@ -539,6 +541,32 @@ fn cmd_load(args: &[String]) {
             eprintln!("Error loading crux: {}", e);
             process::exit(1);
         }
+    }
+}
+
+/// Check a crux's integrity from the shell.
+///
+/// This is the same check the MCP `crux verify` action runs. It existed only
+/// over MCP, so a shell user or a CI job had no way to ask whether a mesh was
+/// sound. Exits non-zero on FAIL so it can gate a pipeline.
+fn cmd_verify(args: &[String]) {
+    const USAGE: &str = "Usage: crux verify <path>";
+    require_positionals(args, 1, USAGE);
+    require_no_extra(args, 1, USAGE);
+
+    let path = PathBuf::from(&args[0]);
+    let db = match schema::load_crux_db(&path) {
+        Ok(db) => db,
+        Err(e) => {
+            eprintln!("Error loading crux: {}", e);
+            process::exit(1);
+        }
+    };
+
+    let report = crux_mesh::mcp::verify_report(&db);
+    println!("{}", report.text);
+    if !report.passed {
+        process::exit(1);
     }
 }
 

@@ -29,7 +29,8 @@ const UNIFIED_TOOLS: &[(&str, &str, &str)] = &[
         "crux",
         concat!(
             "Unified crux knowledge graph tool. action is required.\n",
-            "  create        — create a new .crux.json (requires name; optional kind, origin)\n",
+            "  create        — create a new .crux.json (requires name; optional path, kind, origin, force)\n",
+            "                   path may be a directory or an explicit .crux.json; defaults to cwd\n",
             "  load          — load and summarize a crux (requires path)\n",
             "  query         — filter nodes with structured fields (requires path; optional query/filter_kind/filter_status/tag/property/since/sort/limit)\n",
             "                   query=substring  filter_kind=exact  filter_status=exact  tag=exact(case-insensitive)\n",
@@ -431,19 +432,52 @@ fn resolve_working_dir() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
+/// Resolve the `path` argument of `create` to the `.crux.json` file to write.
+///
+/// Accepts a directory, an explicit `.crux.json`, or a not-yet-existing
+/// directory; falls back to the working directory when `path` is absent. The
+/// parent must already exist — creating intermediate directories on the way to
+/// a mistyped path is its own silent surprise, so say what is missing instead.
+fn resolve_create_target(path: Option<String>) -> Result<PathBuf, String> {
+    let target = match path {
+        Some(p) => {
+            let p = PathBuf::from(p);
+            if p.is_dir() {
+                p.join(".crux.json")
+            } else if p.extension().is_some() {
+                p
+            } else {
+                p.join(".crux.json")
+            }
+        }
+        None => resolve_working_dir().join(".crux.json"),
+    };
+
+    if let Some(parent) = target.parent() {
+        if !parent.as_os_str().is_empty() && !parent.is_dir() {
+            return Err(format!(
+                "Directory does not exist: {}. Create it first, or pass a path \
+                 inside an existing directory.",
+                parent.display()
+            ));
+        }
+    }
+    Ok(target)
+}
+
 /// Refuse to create a crux over an existing one unless `force`.
 ///
-/// `save_crux_db` is an unconditional write and creation always targets the
-/// working directory, so calling create where a crux already lives silently
-/// discarded every node and edge in it. `mesh::init_mesh` has always guarded
-/// its manifest this way; the CLI's `crux create` carries the same guard.
-fn check_create_conflict(dir: &std::path::Path, force: bool) -> Result<(), String> {
-    let existing = dir.join(".crux.json");
-    if existing.exists() && !force {
+/// `save_crux_db` is an unconditional write, so calling create where a crux
+/// already lives silently discarded every node and edge in it. The guard must
+/// test the file creation will actually write: it previously tested the working
+/// directory while `path` was ignored, which made the safety property hold only
+/// because the write never went to the named path either.
+fn check_create_conflict(target: &std::path::Path, force: bool) -> Result<(), String> {
+    if target.exists() && !force {
         return Err(format!(
             "Crux already exists at {}. Overwriting discards all of its nodes and edges; \
              pass force=true to replace it.",
-            existing.display()
+            target.display()
         ));
     }
     Ok(())
@@ -457,16 +491,16 @@ fn tool_crux_create(args: &str) -> Result<String, String> {
 
     let kind = schema::CruxKind::from_str(&kind_str);
     let db = schema::create_crux_db(&name, kind, &origin);
-    let cwd = resolve_working_dir();
-    check_create_conflict(&cwd, extract_bool_value(args, "force").unwrap_or(false))?;
-    schema::save_crux_db(&db, &cwd)?;
+    let target = resolve_create_target(extract_string_value(args, "path"))?;
+    check_create_conflict(&target, extract_bool_value(args, "force").unwrap_or(false))?;
+    schema::save_crux_db(&db, &target)?;
 
     Ok(format!(
         "Created crux '{}' ({})\nID: {}\nFile: {}",
         name,
         kind_str,
         db.header.crux_id,
-        cwd.join(".crux.json").display()
+        target.display()
     ))
 }
 
@@ -2730,7 +2764,23 @@ fn tool_crux_verify(args: &str) -> Result<String, String> {
 
     let path = PathBuf::from(&path_str);
     let db = schema::load_crux_db(&path)?;
+    Ok(verify_report(&db).text)
+}
 
+/// The outcome of an integrity check: the rendered report and whether it passed.
+///
+/// `passed` is kept alongside the text so callers do not have to grep the prose
+/// for "FAIL" to decide an exit code.
+pub struct VerifyReport {
+    pub text: String,
+    pub passed: bool,
+}
+
+/// Run the integrity check over an already-loaded crux.
+///
+/// Split out from the MCP action so the CLI and CI can call the same check
+/// rather than reimplementing it or going without.
+pub fn verify_report(db: &schema::CruxDb) -> VerifyReport {
     let total = db.nodes.iter().filter(|n| n.deleted_at.is_none()).count();
     let mut verified = 0usize;
     let mut unverifiable = 0usize;
@@ -2805,7 +2855,7 @@ fn tool_crux_verify(args: &str) -> Result<String, String> {
     }
 
     // Referential integrity — a distinct defect class from content hashes.
-    let dangling = schema::dangling_edges(&db);
+    let dangling = schema::dangling_edges(db);
     let edges_ok = dangling.is_empty();
 
     out.push_str(&format!(
@@ -2837,12 +2887,13 @@ fn tool_crux_verify(args: &str) -> Result<String, String> {
         }
     }
 
+    let passed = content_ok && edges_ok;
     out.push_str(&format!(
         "\n\n  Overall: {}",
-        if content_ok && edges_ok { "PASS" } else { "FAIL" }
+        if passed { "PASS" } else { "FAIL" }
     ));
 
-    Ok(out)
+    VerifyReport { text: out, passed }
 }
 
 fn tool_mesh_build(args: &str) -> Result<String, String> {
@@ -3539,18 +3590,20 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
+        let target = dir.join(".crux.json");
+
         // Empty directory: nothing to clobber.
-        assert!(check_create_conflict(&dir, false).is_ok());
+        assert!(check_create_conflict(&target, false).is_ok());
 
         let db = schema::create_crux_db("keeper", schema::CruxKind::Codebase, "manual");
         schema::save_crux_db(&db, &dir).unwrap();
 
-        let err = check_create_conflict(&dir, false).unwrap_err();
+        let err = check_create_conflict(&target, false).unwrap_err();
         assert!(err.contains("already exists"), "got: {}", err);
         assert!(err.contains("force=true"), "error should name the escape hatch: {}", err);
 
         // force=true is the deliberate override.
-        assert!(check_create_conflict(&dir, true).is_ok());
+        assert!(check_create_conflict(&target, true).is_ok());
 
         // The guard must not have touched the existing crux.
         assert_eq!(schema::load_crux_db(&dir).unwrap().header.crux_name, "keeper");
@@ -3584,6 +3637,127 @@ mod tests {
         assert!(result.unwrap().contains("mcp-test"));
 
         let _ = args; // suppress unused warning
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_create_writes_to_explicit_path_not_cwd() {
+        let dir = std::env::temp_dir().join("crux_mcp_test_create_path");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let msg = tool_crux_create(&format!(
+            r#"{{"name":"edgetest","kind":"documentation","path":"{}"}}"#,
+            dir.display()
+        ))
+        .unwrap();
+
+        let target = dir.join(".crux.json");
+        assert!(target.exists(), "crux must land at the path given: {}", msg);
+        assert!(msg.contains(&target.display().to_string()), "{}", msg);
+
+        // Nothing was dropped into the working directory.
+        let cwd_crux = resolve_working_dir().join(".crux.json");
+        let stray = std::fs::read_to_string(&cwd_crux).unwrap_or_default();
+        assert!(
+            !stray.contains("edgetest"),
+            "create must not write into cwd when path is given"
+        );
+
+        assert_eq!(
+            schema::load_crux_db(&dir).unwrap().header.crux_name,
+            "edgetest"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_create_accepts_explicit_crux_json_path() {
+        let dir = std::env::temp_dir().join("crux_mcp_test_create_file_path");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let target = dir.join(".crux.json");
+        tool_crux_create(&format!(
+            r#"{{"name":"explicit","kind":"documentation","path":"{}"}}"#,
+            target.display()
+        ))
+        .unwrap();
+
+        assert_eq!(
+            schema::load_crux_db(&target).unwrap().header.crux_name,
+            "explicit"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_create_guards_the_path_it_was_given() {
+        // The case the old cwd-based check missed: the target already holds a
+        // crux, the working directory is clean. Creating must refuse, and must
+        // not silently create in cwd instead.
+        let dir = std::env::temp_dir().join("crux_mcp_test_create_path_guard");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let keeper = schema::create_crux_db("keeper", schema::CruxKind::Codebase, "manual");
+        schema::save_crux_db(&keeper, &dir).unwrap();
+
+        let err = tool_crux_create(&format!(
+            r#"{{"name":"usurper","kind":"documentation","path":"{}"}}"#,
+            dir.display()
+        ))
+        .expect_err("must refuse to overwrite the crux at the given path");
+
+        assert!(err.contains("already exists"), "{}", err);
+        assert!(
+            err.contains(&dir.join(".crux.json").display().to_string()),
+            "the error must name the file it is protecting: {}",
+            err
+        );
+
+        // The existing crux survived untouched.
+        assert_eq!(
+            schema::load_crux_db(&dir).unwrap().header.crux_name,
+            "keeper"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_create_rejects_path_with_missing_parent() {
+        let dir = std::env::temp_dir()
+            .join("crux_mcp_test_create_missing_parent")
+            .join("does")
+            .join("not")
+            .join("exist");
+        let _ = std::fs::remove_dir_all(std::env::temp_dir().join("crux_mcp_test_create_missing_parent"));
+
+        let err = tool_crux_create(&format!(
+            r#"{{"name":"nowhere","kind":"documentation","path":"{}"}}"#,
+            dir.display()
+        ))
+        .expect_err("a path whose parent does not exist must be reported, not invented");
+        assert!(err.contains("Directory does not exist"), "{}", err);
+    }
+
+    #[test]
+    fn test_verify_report_exposes_pass_flag() {
+        let dir = edge_fixture("verify_report_flag");
+
+        let db = schema::load_crux_db(&dir).unwrap();
+        assert!(verify_report(&db).passed, "clean crux must pass");
+
+        tool_crux_add_edges_batch(&edges_args(
+            &dir,
+            r#","allow_forward_refs":true"#,
+            r#"[{"src":"alpha","dst":"GHOST"}]"#,
+        ))
+        .unwrap();
+
+        let db = schema::load_crux_db(&dir).unwrap();
+        let report = verify_report(&db);
+        assert!(!report.passed, "dangling edge must not pass: {}", report.text);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
