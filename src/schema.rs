@@ -1121,6 +1121,66 @@ pub fn crux_db_path(source_path: &std::path::Path) -> std::path::PathBuf {
 }
 
 // ===========================================================================
+// Referential integrity
+// ===========================================================================
+
+/// Why an edge fails to resolve against the nodes in its own crux.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DanglingSides {
+    pub src_missing: bool,
+    pub dst_missing: bool,
+}
+
+impl DanglingSides {
+    /// Human-readable reason naming every side that failed, e.g.
+    /// `"src not found, dst not found"`.
+    pub fn reason(&self) -> String {
+        match (self.src_missing, self.dst_missing) {
+            (true, true) => "src not found, dst not found".to_string(),
+            (true, false) => "src not found".to_string(),
+            (false, true) => "dst not found".to_string(),
+            (false, false) => String::new(),
+        }
+    }
+}
+
+/// Test whether `name` resolves to a live (non-soft-deleted) node.
+pub fn node_exists(db: &CruxDb, name: &str) -> bool {
+    db.nodes.iter().any(|n| n.name == name && n.deleted_at.is_none())
+}
+
+/// Find every edge whose `src` or `dst` does not resolve to a live node.
+///
+/// Membership is recomputed from the current node set rather than read from
+/// the stored `dangling` flag: the flag records what was true when the edge was
+/// written, so it goes stale when a node is added or soft-deleted afterwards,
+/// and it is simply absent from hand-edited or externally-generated files.
+/// Integrity reporting must not trust a self-declared health bit.
+pub fn dangling_edges(db: &CruxDb) -> Vec<(&CruxEdge, DanglingSides)> {
+    let live: std::collections::HashSet<&str> = db
+        .nodes
+        .iter()
+        .filter(|n| n.deleted_at.is_none())
+        .map(|n| n.name.as_str())
+        .collect();
+
+    db.edges
+        .iter()
+        .filter_map(|e| {
+            let sides = DanglingSides {
+                src_missing: !live.contains(e.src.as_str()),
+                dst_missing: !live.contains(e.dst.as_str()),
+            };
+            if sides.src_missing || sides.dst_missing {
+                Some((e, sides))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+// ===========================================================================
 // Summary / Display
 // ===========================================================================
 
@@ -1129,8 +1189,14 @@ pub fn format_crux_summary(db: &CruxDb, max_nodes: Option<usize>) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "CRUX MESH \"{}\"", db.header.crux_name);
     let _ = writeln!(out, "  Kind: {} (origin: {})", db.header.crux_kind, db.header.crux_origin);
-    let _ = writeln!(out, "  {} nodes, {} edges, {} modules",
-        db.nodes.len(), db.edges.len(), db.modules.len());
+    let dangling = dangling_edges(db).len();
+    let edge_note = if dangling > 0 {
+        format!(" ({} dangling)", dangling)
+    } else {
+        String::new()
+    };
+    let _ = writeln!(out, "  {} nodes, {} edges{}, {} modules",
+        db.nodes.len(), db.edges.len(), edge_note, db.modules.len());
 
     if !db.domains.is_empty() {
         let tags: Vec<&str> = db.domains.iter().map(|d| d.tag.as_str()).collect();

@@ -38,7 +38,10 @@ const UNIFIED_TOOLS: &[(&str, &str, &str)] = &[
             "  add_node      — add a single node (requires path, name; optional kind/module/summary/tags/classification)\n",
             "  add_nodes     — add multiple nodes from JSON array (requires path, nodes)\n",
             "  add_edge      — add an edge between nodes (requires path, src, dst; optional kind, detail)\n",
-            "  add_edges     — add multiple edges from JSON array (requires path, edges)\n",
+            "  add_edges     — add multiple edges from JSON array (requires path, edges; optional allow_forward_refs)\n",
+            "                   All-or-nothing: if any edge names a node that does not exist the whole\n",
+            "                   batch is rejected and every offender is named. Pass allow_forward_refs=true\n",
+            "                   to store unresolved edges as dangling instead.\n",
             "  update_node   — update summary/tags/properties/status/priority/depends (requires path, name)\n",
             "  remove_node   — soft-delete a node (requires path, name)\n",
             "  generate      — generate crux from text input via auto-adapter (requires name, input)\n",
@@ -50,7 +53,7 @@ const UNIFIED_TOOLS: &[(&str, &str, &str)] = &[
             "  enrich        — enrich nodes with computed metadata (requires path; optional operations, lml_bin)\n",
             "  bootstrap     — scaffold a crux from a natural-language description (requires path, description)"
         ),
-        r#"{"type":"object","properties":{"action":{"type":"string","description":"create|load|query|add_node|add_nodes|add_edge|add_edges|update_node|remove_node|generate|scan|generate_dir|verify|resolve|extract|enrich|bootstrap"},"path":{"type":"string","description":"Path to crux file or directory"},"name":{"type":"string","description":"Node or crux name"},"kind":{"type":"string","description":"Crux or node kind"},"origin":{"type":"string","description":"Origin identifier (for create)"},"query":{"type":"string","description":"Substring filter on name/kind/tags/summary (for query)"},"filter_kind":{"type":"string","description":"Exact node kind filter (for query)"},"filter_status":{"type":"string","description":"Exact planning.status filter: Todo|In Progress|Done|Blocked (for query)"},"tag":{"type":"string","description":"Exact tag match, case-insensitive (for query)"},"property":{"type":"string","description":"Property filter: key=value, key>N, or key<N (for query)"},"since":{"type":"string","description":"Filter by planning.updated_at >= date: YYYY-MM-DD or unix timestamp (for query)"},"sort":{"type":"string","description":"Sort order: priority|name|created (for query)"},"limit":{"type":"integer","description":"Max results (for query, default 50)"},"module":{"type":"string","description":"Module or namespace (for add_node)"},"summary":{"type":"string","description":"Node summary"},"tags":{"type":"string","description":"Comma-separated tags"},"classification":{"type":"string","description":"Security classification: public|internal|confidential|restricted"},"nodes":{"type":"string","description":"JSON array of node objects (for add_nodes)"},"src":{"type":"string","description":"Source node name (for add_edge/add_edges)"},"dst":{"type":"string","description":"Destination node name (for add_edge)"},"detail":{"type":"string","description":"Edge detail (for add_edge)"},"edges":{"type":"string","description":"JSON array of edge objects (for add_edges)"},"properties":{"type":"string","description":"Properties to append as key=value,... (for update_node)"},"status":{"type":"string","description":"Planning status (for update_node)"},"priority":{"type":"string","description":"Planning priority 1-5 (for update_node)"},"depends":{"type":"string","description":"Comma-separated dependencies (for update_node)"},"node_name":{"type":"string","description":"Node name (for resolve/extract actions)"},"input":{"type":"string","description":"Input text (for generate action)"},"format":{"type":"string","description":"Format hint: auto|markdown|plaintext|manual (for generate)"},"source_path":{"type":"string","description":"Source directory (for generate_dir)"},"output_path":{"type":"string","description":"Output directory (for generate_dir)"},"mesh_name":{"type":"string","description":"Mesh name prefix (for generate_dir)"},"strategy":{"type":"string","description":"Grouping strategy: by_kind|by_directory|flat (for generate_dir)"},"operations":{"type":"string","description":"Comma-separated operations for enrich: reach,lint,schema,functions"},"lml_bin":{"type":"string","description":"Path to lml binary (for enrich lint operation)"},"description":{"type":"string","description":"Natural-language description of what to track (for bootstrap)"}},"required":["action"]}"#,
+        r#"{"type":"object","properties":{"action":{"type":"string","description":"create|load|query|add_node|add_nodes|add_edge|add_edges|update_node|remove_node|generate|scan|generate_dir|verify|resolve|extract|enrich|bootstrap"},"path":{"type":"string","description":"Path to crux file or directory"},"name":{"type":"string","description":"Node or crux name"},"kind":{"type":"string","description":"Crux or node kind"},"origin":{"type":"string","description":"Origin identifier (for create)"},"query":{"type":"string","description":"Substring filter on name/kind/tags/summary (for query)"},"filter_kind":{"type":"string","description":"Exact node kind filter (for query)"},"filter_status":{"type":"string","description":"Exact planning.status filter: Todo|In Progress|Done|Blocked (for query)"},"tag":{"type":"string","description":"Exact tag match, case-insensitive (for query)"},"property":{"type":"string","description":"Property filter: key=value, key>N, or key<N (for query)"},"since":{"type":"string","description":"Filter by planning.updated_at >= date: YYYY-MM-DD or unix timestamp (for query)"},"sort":{"type":"string","description":"Sort order: priority|name|created (for query)"},"limit":{"type":"integer","description":"Max results (for query, default 50)"},"module":{"type":"string","description":"Module or namespace (for add_node)"},"summary":{"type":"string","description":"Node summary"},"tags":{"type":"string","description":"Comma-separated tags"},"classification":{"type":"string","description":"Security classification: public|internal|confidential|restricted"},"nodes":{"type":"string","description":"JSON array of node objects (for add_nodes)"},"src":{"type":"string","description":"Source node name (for add_edge/add_edges)"},"dst":{"type":"string","description":"Destination node name (for add_edge)"},"detail":{"type":"string","description":"Edge detail (for add_edge)"},"edges":{"type":"string","description":"JSON array of edge objects (for add_edges)"},"allow_forward_refs":{"type":"boolean","description":"Allow add_edges to store edges whose endpoints do not exist yet, flagged as dangling (default false; batch is otherwise all-or-nothing)"},"properties":{"type":"string","description":"Properties to append as key=value,... (for update_node)"},"status":{"type":"string","description":"Planning status (for update_node)"},"priority":{"type":"string","description":"Planning priority 1-5 (for update_node)"},"depends":{"type":"string","description":"Comma-separated dependencies (for update_node)"},"node_name":{"type":"string","description":"Node name (for resolve/extract actions)"},"input":{"type":"string","description":"Input text (for generate action)"},"format":{"type":"string","description":"Format hint: auto|markdown|plaintext|manual (for generate)"},"source_path":{"type":"string","description":"Source directory (for generate_dir)"},"output_path":{"type":"string","description":"Output directory (for generate_dir)"},"mesh_name":{"type":"string","description":"Mesh name prefix (for generate_dir)"},"strategy":{"type":"string","description":"Grouping strategy: by_kind|by_directory|flat (for generate_dir)"},"operations":{"type":"string","description":"Comma-separated operations for enrich: reach,lint,schema,functions"},"lml_bin":{"type":"string","description":"Path to lml binary (for enrich lint operation)"},"description":{"type":"string","description":"Natural-language description of what to track (for bootstrap)"}},"required":["action"]}"#,
     ),
     (
         "mesh",
@@ -257,11 +260,15 @@ const TOOLS: &[(&str, &str, &str)] = &[
 // JSON-RPC 2.0 helpers
 // ===========================================================================
 
-fn json_rpc_result(id: &str, content: &str) -> String {
+/// Build a `tools/call` result, setting the MCP `isError` flag when the tool
+/// failed. Without it a caller has to pattern-match on prose to tell a rejection
+/// from a success, which is exactly the branch automated writers get wrong.
+fn json_rpc_tool_result(id: &str, content: &str, is_error: bool) -> String {
     format!(
-        "{{\"jsonrpc\":\"2.0\",\"id\":{},\"result\":{{\"content\":[{{\"type\":\"text\",\"text\":{}}}]}}}}",
+        "{{\"jsonrpc\":\"2.0\",\"id\":{},\"result\":{{\"content\":[{{\"type\":\"text\",\"text\":{}}}],\"isError\":{}}}}}",
         id,
-        json_escape(content)
+        json_escape(content),
+        is_error
     )
 }
 
@@ -305,8 +312,8 @@ fn handle_tools_list(id: &str) -> String {
 fn handle_tool_call(id: &str, name: &str, args: &str) -> String {
     let result = dispatch_tool(name, args);
     match result {
-        Ok(text) => json_rpc_result(id, &text),
-        Err(e) => json_rpc_result(id, &format!("Error: {}", e)),
+        Ok(text) => json_rpc_tool_result(id, &text, false),
+        Err(e) => json_rpc_tool_result(id, &format!("Error: {}", e), true),
     }
 }
 
@@ -1569,11 +1576,23 @@ fn tool_crux_add_nodes_batch(args: &str) -> Result<String, String> {
     ))
 }
 
+/// Batch-add edges, rejecting any whose endpoints do not resolve.
+///
+/// All-or-nothing by default: if any edge in the batch is invalid, nothing is
+/// written and the caller gets every offender named. A partially-applied batch
+/// leaves an unattended writer unsure what to retry, so the safer default is to
+/// apply none of it.
+///
+/// `allow_forward_refs=true` is the deliberate escape hatch for pipelines that
+/// write edges before their nodes: unresolved edges are then admitted and stored
+/// with `dangling: true`, which `verify` and `load` report. Without the flag a
+/// typo and an intentional forward reference are indistinguishable once written.
 fn tool_crux_add_edges_batch(args: &str) -> Result<String, String> {
     let path_str = extract_string_value(args, "path")
         .ok_or_else(|| "Missing required parameter: path".to_string())?;
     let edges_json = extract_string_value(args, "edges")
         .ok_or_else(|| "Missing required parameter: edges".to_string())?;
+    let allow_forward_refs = extract_bool_value(args, "allow_forward_refs").unwrap_or(false);
 
     let path = PathBuf::from(&path_str);
     let mut db = schema::load_crux_db(&path)?;
@@ -1584,54 +1603,114 @@ fn tool_crux_add_edges_batch(args: &str) -> Result<String, String> {
     }
 
     let edge_objects = extract_json_objects_from_array(trimmed);
-    let mut added = 0usize;
-    let mut skipped = 0usize;
 
-    for obj in &edge_objects {
-        let src = match extract_string_value(obj, "src") {
-            Some(s) => s,
-            None => { skipped += 1; continue; }
+    // Pass 1: resolve and classify every edge before writing any of them.
+    struct Pending {
+        src: String,
+        dst: String,
+        kind: String,
+        detail: String,
+        unresolved: bool,
+    }
+    let mut pending: Vec<Pending> = Vec::new();
+    let mut rejected: Vec<String> = Vec::new();
+    let mut forward_refs: Vec<String> = Vec::new();
+
+    for (index, obj) in edge_objects.iter().enumerate() {
+        let src = extract_string_value(obj, "src");
+        let dst = extract_string_value(obj, "dst");
+
+        // A missing src/dst *key* is malformed input, distinct from a key that
+        // names a node which does not exist.
+        let (src, dst) = match (src, dst) {
+            (Some(s), Some(d)) => (s, d),
+            (s, d) => {
+                let mut missing = Vec::new();
+                if s.is_none() { missing.push("src"); }
+                if d.is_none() { missing.push("dst"); }
+                rejected.push(format!(
+                    "  [{}] {} --> {}: missing required field(s): {}",
+                    index,
+                    s.as_deref().unwrap_or("<no src>"),
+                    d.as_deref().unwrap_or("<no dst>"),
+                    missing.join(", ")
+                ));
+                continue;
+            }
         };
-        let dst = match extract_string_value(obj, "dst") {
-            Some(d) => d,
-            None => { skipped += 1; continue; }
+
+        let sides = schema::DanglingSides {
+            src_missing: !schema::node_exists(&db, &src),
+            dst_missing: !schema::node_exists(&db, &dst),
         };
+        let unresolved = sides.src_missing || sides.dst_missing;
 
-        // Validate both nodes exist (allow cross-crux: mark dangling if not found)
-        let src_exists = db.nodes.iter().any(|n| n.name == src && n.deleted_at.is_none());
-        let dst_exists = db.nodes.iter().any(|n| n.name == dst && n.deleted_at.is_none());
+        if unresolved && !allow_forward_refs {
+            rejected.push(format!("  [{}] {} --> {}: {}", index, src, dst, sides.reason()));
+            continue;
+        }
+        if unresolved {
+            forward_refs.push(format!("  [{}] {} --> {}: {}", index, src, dst, sides.reason()));
+        }
 
-        let kind_str = extract_string_value(obj, "kind").unwrap_or_else(|| "relates_to".to_string());
-        let detail = extract_string_value(obj, "detail").unwrap_or_default();
-        let cross_crux = !src_exists || !dst_exists;
+        pending.push(Pending {
+            src,
+            dst,
+            kind: extract_string_value(obj, "kind").unwrap_or_else(|| "relates_to".to_string()),
+            detail: extract_string_value(obj, "detail").unwrap_or_default(),
+            unresolved,
+        });
+    }
 
+    if !rejected.is_empty() {
+        return Err(format!(
+            "Batch rejected: {} of {} edge(s) invalid. No edges were written.\n{}\n\n\
+             Add the missing nodes first, or pass allow_forward_refs=true to store\n\
+             unresolved edges as dangling (reported by verify and load).",
+            rejected.len(),
+            edge_objects.len(),
+            rejected.join("\n")
+        ));
+    }
+
+    // Pass 2: every edge validated, so the write cannot leave a partial batch.
+    for edge in &pending {
         let edge_id = format!(
             "sha256:{}",
             crate::crypto::sha256_hex(
-                format!("edge:{}:{}:{}", db.header.crux_id, src, dst).as_bytes()
+                format!("edge:{}:{}:{}", db.header.crux_id, edge.src, edge.dst).as_bytes()
             )
         );
 
         db.edges.push(schema::CruxEdge {
             edge_id,
-            src,
-            dst,
-            kind: schema::EdgeKind::from_str(&kind_str),
+            src: edge.src.clone(),
+            dst: edge.dst.clone(),
+            kind: schema::EdgeKind::from_str(&edge.kind),
             weight: 1.0,
-            detail,
-            cross_crux,
+            detail: edge.detail.clone(),
+            cross_crux: edge.unresolved,
             binding: String::new(),
             created_at: crate::crypto::now_unix(),
-            dangling: !src_exists || !dst_exists,
+            dangling: edge.unresolved,
         });
-        added += 1;
     }
 
     schema::save_crux_db(&db, &path)?;
-    Ok(format!(
-        "Batch add complete: {} edge(s) added, {} skipped (missing src/dst)",
-        added, skipped
-    ))
+
+    let mut out = format!(
+        "Batch add complete: {} edge(s) added, all endpoints resolved.",
+        pending.len()
+    );
+    if !forward_refs.is_empty() {
+        out = format!(
+            "Batch add complete: {} edge(s) added, {} stored as dangling forward reference(s):\n{}",
+            pending.len(),
+            forward_refs.len(),
+            forward_refs.join("\n")
+        );
+    }
+    Ok(out)
 }
 
 fn tool_crux_update_node(args: &str) -> Result<String, String> {
@@ -2637,6 +2716,14 @@ fn tool_crux_bootstrap(args: &str) -> Result<String, String> {
     ))
 }
 
+/// Check a crux's integrity along two independent axes.
+///
+/// Node content hashes and edge referential integrity are separate classes of
+/// defect — a crux can have either without the other — so they are reported as
+/// separate sections with their own status, and the overall status is a PASS
+/// only when both are. Dangling edges are recomputed from live node membership
+/// rather than read from the stored `dangling` flag, so hand-edited files and
+/// edges orphaned by a later node deletion are caught too.
 fn tool_crux_verify(args: &str) -> Result<String, String> {
     let path_str = extract_string_value(args, "path")
         .ok_or_else(|| "Missing required parameter: path".to_string())?;
@@ -2662,7 +2749,8 @@ fn tool_crux_verify(args: &str) -> Result<String, String> {
     }
 
     let mut out = format!(
-        "Content check for crux '{}'\n  \
+        "Integrity check for crux '{}'\n\n  \
+         CONTENT (node payload hashes)\n  \
          Nodes checked:            {}\n  \
          Verified (payload intact): {}\n  \
          Unverifiable (pre-{} hash): {}\n  \
@@ -2670,7 +2758,9 @@ fn tool_crux_verify(args: &str) -> Result<String, String> {
         db.header.crux_name, total, verified, schema::CRUX_HASH_PREFIX, unverifiable, absent
     );
 
-    if mismatched.is_empty() && malformed.is_empty() {
+    let content_ok = mismatched.is_empty() && malformed.is_empty();
+
+    if content_ok {
         if verified == 0 && total > 0 {
             out.push_str(
                 "\n  Status: PASS (nothing verifiable)\n\n  \
@@ -2713,6 +2803,44 @@ fn tool_crux_verify(args: &str) -> Result<String, String> {
             }
         }
     }
+
+    // Referential integrity — a distinct defect class from content hashes.
+    let dangling = schema::dangling_edges(&db);
+    let edges_ok = dangling.is_empty();
+
+    out.push_str(&format!(
+        "\n\n  REFERENTIAL (edge endpoints)\n  \
+         Edges checked:            {}\n  \
+         Dangling:                 {}",
+        db.edges.len(),
+        dangling.len()
+    ));
+
+    if edges_ok {
+        out.push_str("\n  Status: PASS");
+    } else {
+        out.push_str(&format!(
+            "\n  Status: FAIL — {} edge(s) point at nodes that do not exist\n\n  \
+             DANGLING — these edges assert structure the graph cannot support. A query\n  \
+             that follows them finds nothing, and a reader counting edges is counting\n  \
+             claims, not relationships:",
+            dangling.len()
+        ));
+        for (edge, sides) in &dangling {
+            out.push_str(&format!(
+                "\n    {} --[{}]--> {}  ({})",
+                edge.src,
+                edge.kind.as_str(),
+                edge.dst,
+                sides.reason()
+            ));
+        }
+    }
+
+    out.push_str(&format!(
+        "\n\n  Overall: {}",
+        if content_ok && edges_ok { "PASS" } else { "FAIL" }
+    ));
 
     Ok(out)
 }
@@ -3661,6 +3789,237 @@ mod tests {
         ));
         assert!(bad.is_err());
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Set up a crux with two live nodes, `alpha` and `beta`.
+    fn edge_fixture(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("crux_mcp_test_{}", tag));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let db = schema::create_crux_db("edge-test", schema::CruxKind::Codebase, "rust");
+        schema::save_crux_db(&db, &dir).unwrap();
+        for n in ["alpha", "beta"] {
+            tool_crux_add_node(&format!(
+                r#"{{"path":"{}","name":"{}","kind":"reference"}}"#,
+                dir.display(),
+                n
+            ))
+            .unwrap();
+        }
+        dir
+    }
+
+    /// Build add_edges arguments. `edges` is declared as a string in the tool
+    /// schema, so the array has to be JSON-encoded into it.
+    fn edges_args(dir: &std::path::Path, extra: &str, edges: &str) -> String {
+        format!(
+            r#"{{"path":"{}"{},"edges":"{}"}}"#,
+            dir.display(),
+            extra,
+            edges.replace('\\', "\\\\").replace('"', "\\\"")
+        )
+    }
+
+    #[test]
+    fn test_add_edges_rejects_missing_dst() {
+        let dir = edge_fixture("edges_missing_dst");
+
+        let result = tool_crux_add_edges_batch(&edges_args(
+            &dir,
+            "",
+            r#"[{"src":"alpha","dst":"NO_SUCH_DST","kind":"relates_to"}]"#,
+        ));
+
+        let err = result.expect_err("edge with missing dst must be rejected");
+        assert!(err.contains("NO_SUCH_DST"), "offender must be named: {}", err);
+        assert!(err.contains("dst not found"), "side must be named: {}", err);
+
+        // Nothing reached the file.
+        assert_eq!(schema::load_crux_db(&dir).unwrap().edges.len(), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_add_edges_rejects_missing_src() {
+        let dir = edge_fixture("edges_missing_src");
+
+        let result = tool_crux_add_edges_batch(&edges_args(
+            &dir,
+            "",
+            r#"[{"src":"NO_SUCH_SRC","dst":"beta","kind":"relates_to"}]"#,
+        ));
+
+        let err = result.expect_err("edge with missing src must be rejected");
+        assert!(err.contains("NO_SUCH_SRC"), "offender must be named: {}", err);
+        assert!(err.contains("src not found"), "side must be named: {}", err);
+
+        assert_eq!(schema::load_crux_db(&dir).unwrap().edges.len(), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_add_edges_names_both_missing_sides_in_one_reason() {
+        let dir = edge_fixture("edges_both_missing");
+
+        let err = tool_crux_add_edges_batch(&edges_args(
+            &dir,
+            "",
+            r#"[{"src":"NO_SRC","dst":"NO_DST","kind":"relates_to"}]"#,
+        ))
+        .expect_err("edge with both endpoints missing must be rejected");
+
+        assert!(
+            err.contains("src not found, dst not found"),
+            "both sides must appear in one reason string: {}",
+            err
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_add_edges_partial_batch_is_all_or_nothing() {
+        let dir = edge_fixture("edges_partial");
+
+        // One valid edge, three invalid — the documented behaviour is that the
+        // valid one is NOT applied, so the caller can retry the whole array.
+        let err = tool_crux_add_edges_batch(&edges_args(
+            &dir,
+            "",
+            r#"[{"src":"alpha","dst":"beta","kind":"relates_to"},
+                {"src":"alpha","dst":"NO_SUCH_DST","kind":"relates_to"},
+                {"src":"NO_SUCH_SRC","dst":"beta","kind":"relates_to"},
+                {"src":"NO_SUCH_SRC2","dst":"NO_SUCH_DST2","kind":"relates_to"}]"#,
+        ))
+        .expect_err("a partially-valid batch must be rejected whole");
+
+        assert!(err.contains("3 of 4"), "counts must be reported: {}", err);
+        assert!(err.contains("No edges were written"), "{}", err);
+        // Every offender named, with its input index.
+        for name in ["NO_SUCH_DST", "NO_SUCH_SRC", "NO_SUCH_SRC2", "NO_SUCH_DST2"] {
+            assert!(err.contains(name), "{} must be named: {}", name, err);
+        }
+        for idx in ["[1]", "[2]", "[3]"] {
+            assert!(err.contains(idx), "index {} must be reported: {}", idx, err);
+        }
+
+        assert_eq!(schema::load_crux_db(&dir).unwrap().edges.len(), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_add_edges_success_message_claims_only_what_it_checked() {
+        let dir = edge_fixture("edges_message");
+
+        let msg = tool_crux_add_edges_batch(&edges_args(
+            &dir,
+            "",
+            r#"[{"src":"alpha","dst":"beta","kind":"relates_to"}]"#,
+        ))
+        .unwrap();
+
+        assert!(msg.contains("1 edge(s) added"), "{}", msg);
+        // Regression guard for the original defect: the success string advertised
+        // a "skipped (missing src/dst)" count that no validation had produced.
+        assert!(
+            !msg.contains("skipped"),
+            "must not report a skip count it did not compute: {}",
+            msg
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_add_edges_forward_refs_are_opt_in_and_marked() {
+        let dir = edge_fixture("edges_forward_refs");
+
+        let msg = tool_crux_add_edges_batch(&edges_args(
+            &dir,
+            r#","allow_forward_refs":true"#,
+            r#"[{"src":"alpha","dst":"LATER","kind":"relates_to"}]"#,
+        ))
+        .unwrap();
+        assert!(msg.contains("dangling forward reference"), "{}", msg);
+        assert!(msg.contains("LATER"), "{}", msg);
+
+        // Admitted, but stored in a state that is distinguishable from a resolved edge.
+        let loaded = schema::load_crux_db(&dir).unwrap();
+        assert_eq!(loaded.edges.len(), 1);
+        assert!(loaded.edges[0].dangling);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_verify_fails_on_hand_inserted_dangling_edge() {
+        let dir = edge_fixture("verify_dangling");
+
+        // Insert the edge behind the tool's back, exactly as a foreign writer or
+        // a hand edit would — no `dangling` flag set anywhere in the file.
+        let mut db = schema::load_crux_db(&dir).unwrap();
+        db.edges.push(schema::CruxEdge {
+            edge_id: "sha256:test".to_string(),
+            src: "alpha".to_string(),
+            dst: "GHOST".to_string(),
+            kind: schema::EdgeKind::RelatesTo,
+            weight: 1.0,
+            detail: String::new(),
+            cross_crux: false,
+            binding: String::new(),
+            created_at: 0,
+            dangling: false,
+        });
+        schema::save_crux_db(&db, &dir).unwrap();
+
+        let out = tool_crux_verify(&format!(r#"{{"path":"{}"}}"#, dir.display())).unwrap();
+
+        assert!(out.contains("Overall: FAIL"), "must not pass: {}", out);
+        assert!(out.contains("GHOST"), "offender must be named: {}", out);
+        assert!(out.contains("REFERENTIAL"), "{}", out);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_load_summary_reports_dangling_count() {
+        let dir = edge_fixture("load_dangling");
+
+        tool_crux_add_edges_batch(&edges_args(
+            &dir,
+            r#","allow_forward_refs":true"#,
+            r#"[{"src":"alpha","dst":"beta"},{"src":"alpha","dst":"GHOST"}]"#,
+        ))
+        .unwrap();
+
+        let out = tool_crux_load(&format!(r#"{{"path":"{}"}}"#, dir.display())).unwrap();
+        assert!(
+            out.contains("2 edges (1 dangling)"),
+            "a cold reader must see the dangling count: {}",
+            out
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_tool_call_sets_is_error_on_failure() {
+        let dir = edge_fixture("is_error_flag");
+
+        let ok = handle_tool_call(
+            "1",
+            "crux",
+            &edges_args(&dir, r#","action":"add_edges""#, r#"[{"src":"alpha","dst":"beta"}]"#),
+        );
+        assert!(ok.contains("\"isError\":false"), "{}", ok);
+
+        let bad = handle_tool_call(
+            "1",
+            "crux",
+            &edges_args(&dir, r#","action":"add_edges""#, r#"[{"src":"alpha","dst":"GHOST"}]"#),
+        );
+        assert!(
+            bad.contains("\"isError\":true"),
+            "rejection must be branchable without parsing prose: {}",
+            bad
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
