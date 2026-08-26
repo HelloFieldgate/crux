@@ -1,5 +1,0 @@
-/* Hide the goto dialog (slide list panel) and the overview thumbnail grid trigger */
-#slidev-goto-dialog,
-button[title="Show slide overview"] {
-  display: none !important;
-}
