@@ -22,6 +22,13 @@ build:
 ## ad-hoc signature (flags=0x2, location-independent) *before* the compare, so
 ## the copy is valid at the install location AND the `cmp` stays a true no-op
 ## when nothing changed (this target runs on every MCP server startup).
+##
+## The copy lands on a TEMP NAME and is then renamed over the target. A plain
+## `cp` overwrites the destination in place, and on macOS overwriting a signed
+## binary that has already been executed leaves the kernel killing it at exec
+## (SIGKILL / exit 137) while `codesign --verify` still passes on disk — a
+## genuinely confusing failure. `mv` swaps the directory entry instead, so the
+## new binary gets a fresh vnode and no stale signature is cached against it.
 install: build
 	@mkdir -p "$(INSTALL_DIR)"
 	@for bin in $(BINS); do \
@@ -31,8 +38,9 @@ install: build
 	        codesign --force --sign - "$$src" 2>/dev/null || { echo "install: codesign failed for $$src (is the Xcode command-line toolchain installed?)" >&2; exit 1; }; \
 	    fi; \
 	    if [ ! -f "$$dst" ] || ! cmp -s "$$src" "$$dst"; then \
-	        echo "install: $$bin → $$dst"; \
-	        cp "$$src" "$$dst" && chmod +x "$$dst" || exit 1; \
+	        echo "install: $$bin -> $$dst"; \
+	        rm -f "$$dst.new" && cp "$$src" "$$dst.new" && chmod +x "$$dst.new" \
+	            && mv -f "$$dst.new" "$$dst" || exit 1; \
 	    fi; \
 	done
 
