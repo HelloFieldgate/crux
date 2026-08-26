@@ -33,3 +33,9 @@ local/
 
 # Local MCP registration (personal machine paths — not for the public repo)
 /.mcp.json
+
+# Harness-specific local state. settings.local.json is personal by Claude Code's
+# own convention (the .local. variant is never shared) and allowlists MCP servers
+# that exist on one machine. Agent-facing guidance that belongs to the project
+# lives in CRUX_AGENT_SPEC.md (vendor-neutral) and CLAUDE.md (harness layer).
+/.claude/
